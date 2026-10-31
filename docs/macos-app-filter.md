@@ -52,7 +52,18 @@ source-app audit token through `SecCodeCopyGuestWithAttributes`, checks dynamic
 code validity, and reads signing metadata and runtime status from that dynamic
 code object. Team-signed bindings additionally require an Apple signing anchor,
 the exact signing identifier and certificate Team ID. A path, bundle display name or PID alone
-never authorizes an app. There is no positive identity cache or parent scan.
+never authorizes an app. There is no parent scan.
+
+Full validation also compares the running code with its file on disk, so an app
+that updates itself while running (a new file renamed over the old one) fails it
+with `errSecCSStaticCodeChanged` until it restarts. To keep such an app on its
+own rules, a verified or ad hoc result is kept per process image, keyed by the
+full audit token (the PID version changes on exec, so a key never names two
+images). The cache is bounded and is used only while the kernel still reports
+the running code as valid; code that becomes invalid goes back to full
+validation and is denied. A bound app therefore stays bound after it updates
+itself instead of escaping to `unmatched`. An app whose files changed before its
+first flow is seen still fails closed.
 
 Bindings require an exact `team_id` and `signing_id` pair. OS-confirmed valid ad
 hoc code without a Team ID cannot match a binding: it follows `unmatched`, with

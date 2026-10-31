@@ -241,6 +241,7 @@ do {
     let cappedObject = try JSONSerialization.jsonObject(with: Data(capped.utf8)) as! [String: Any]
     expect((cappedObject["detail"] as? String)?.utf8.count == 512, "core detail byte cap")
     try securityRegressions()
+    try identityCacheRegressions()
     print("PASS: \(tests) assertions (policy, app scope, identity, user presence, TLS, privacy, snapshots, receipts)")
     print("Unit tests only. No Network Extension was activated; no live enforcement is claimed.")
 } catch { FileHandle.standardError.write(Data("Unexpected test error: \(error)\n".utf8)); exit(1) }

@@ -5,6 +5,13 @@ enum ConfigurationError: Error, CustomStringConvertible {
     var description: String {
         switch self { case .invalid(let message): return message }
     }
+
+    /// A fixed label for a refused configuration, safe for public control
+    /// receipts. This module's own reasons pass through; decoder errors can
+    /// quote the input, so they all become one label.
+    static func cause(of error: Error) -> String {
+        (error as? ConfigurationError)?.description ?? "invalid_configuration_document"
+    }
 }
 
 /// Foundation validates syntax; this additional pass rejects duplicate keys,

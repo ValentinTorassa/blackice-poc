@@ -152,15 +152,18 @@ final class SnapshotStore {
         return current
     }
 
-    func install(_ candidate: AppConfiguration) throws {
+    /// Returns false when the candidate is the snapshot already installed.
+    @discardableResult
+    func install(_ candidate: AppConfiguration) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         if let current {
-            if candidate.generation == current.generation && candidate.id == current.id { return }
+            if candidate.generation == current.generation && candidate.id == current.id { return false }
             guard candidate.generation > current.generation else {
                 throw ConfigurationError.invalid("stale_generation")
             }
         }
         current = candidate
+        return true
     }
 
     func clear() {

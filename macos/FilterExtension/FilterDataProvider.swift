@@ -34,7 +34,7 @@ final class FilterDataProvider: NEFilterDataProvider {
                 timer?.cancel(); timer = nil
                 snapshots.clear()
                 runID = identifier
-                try snapshots.install(candidate)
+                _ = try snapshots.install(candidate)
             }
             apply(Self.makeSettings()) { [weak self] error in
                 guard let self else { completionHandler(ConfigurationError.invalid("provider_stopped")); return }
@@ -56,16 +56,17 @@ final class FilterDataProvider: NEFilterDataProvider {
                             self.reloadConfiguration()
                         }
                     }
+                    self.controlEvent("scope_start", reason: "filter_settings_applied")
                     // Also catches a preference change while applySettings was pending.
                     self.reloadConfiguration()
                     self.startMaintenance()
-                    self.controlEvent("scope_start", reason: "filter_settings_applied")
                     completionHandler(nil)
                 }
             }
         } catch {
             snapshots.clear()
-            controlEvent("warning", reason: "invalid_start_configuration")
+            controlEvent("warning", reason: "invalid_start_configuration",
+                         detail: ";cause=\(ConfigurationError.cause(of: error))")
             completionHandler(ConfigurationError.invalid("invalid_start_configuration"))
         }
     }
@@ -93,15 +94,14 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func reloadConfiguration() {
         do {
-            let previous = snapshots.read()?.generation
-            try snapshots.install(readConfiguration())
-            if previous != snapshots.read()?.generation {
-                discardPending(reason: "policy_changed") { _ in true }
-            }
+            // The same generation and digest again: nothing to activate or drop.
+            guard try snapshots.install(readConfiguration()) else { return }
+            discardPending(reason: "policy_changed") { _ in true }
             controlEvent("policy_activated", reason: "snapshot_installed")
         } catch {
             // Invalid or stale updates cannot replace a working snapshot.
-            controlEvent("warning", reason: "configuration_update_rejected")
+            controlEvent("warning", reason: "configuration_update_rejected",
+                         detail: ";cause=\(ConfigurationError.cause(of: error))")
         }
     }
 

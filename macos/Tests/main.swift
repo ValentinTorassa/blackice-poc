@@ -219,14 +219,24 @@ do {
            "evaluator scopes for unbound and unavailable are reserved")
     expect(!validTeamID("A\" OR true") && !validSigningID("com.a\" or true"), "requirement injection rejected")
     let snapshots = SnapshotStore()
-    try snapshots.install(config)
-    try snapshots.install(config)
+    expect(try snapshots.install(config), "first snapshot installed")
+    // A reload of the same preference must not log a policy activation or drop held handshakes.
+    expect(try !snapshots.install(config), "same generation and digest is not a new snapshot")
     let (_, changed) = try configuration(policy: #"{"mode":"allow-all"}"#)
-    rejects("same generation different policy rejected") { try snapshots.install(changed) }
+    rejects("same generation different policy rejected", reason: "stale_generation") { _ = try snapshots.install(changed) }
     expect(snapshots.read()?.id == config.id, "failed update retains snapshot")
     let (_, second) = try configuration(gen: 2)
-    try snapshots.install(second)
-    rejects("stale generation rejected") { try snapshots.install(config) }
+    expect(try snapshots.install(second), "higher generation installed")
+    rejects("stale generation rejected", reason: "stale_generation") { _ = try snapshots.install(config) }
+    expect(ConfigurationError.cause(of: ConfigurationError.invalid("policy_sha256_mismatch")) == "policy_sha256_mismatch",
+           "refusal cause names the check")
+    do {
+        _ = try AppConfiguration(data: Data(#"{"version":"<script>","generation":"x"}"#.utf8))
+        expect(false, "mistyped configuration refused")
+    } catch {
+        expect(!(error is ConfigurationError) && ConfigurationError.cause(of: error) == "invalid_configuration_document",
+               "decoder errors never put input text in a public receipt")
+    }
     snapshots.clear()
     expect(snapshots.read() == nil, "stop clears snapshot")
 

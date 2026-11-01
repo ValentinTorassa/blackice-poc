@@ -318,7 +318,12 @@ Absent optional values are omitted. Flow decisions use `point: "app_filter"` and
 validated app/process identities and hostname provenance. `gen`, `policy` and
 `hostname_mode` come from the snapshot that made the decision, also when a
 held TLS handshake is logged after a newer snapshot was installed.
-Lifecycle/configuration events use `point: "control"`. String fields are cleaned
+Lifecycle/configuration events use `point: "control"`. `policy_activated` is
+written only when a reload installs a new snapshot, not when the provider reads
+the same generation and digest again. A refused startup or update records why in
+`detail` as `cause=<reason>` (for example `stale_generation` or
+`policy_sha256_mismatch`); decoder errors, which can quote the input, all become
+`cause=invalid_configuration_document`. String fields are cleaned
 and capped at the same byte limits as the core. Invalid UTF-8 bytes, C0/C1,
 bidi and zero-width characters become `?`; truncation preserves UTF-8 character
 boundaries and appends `...`. The raw-byte cleaner handles malformed UTF-8 before

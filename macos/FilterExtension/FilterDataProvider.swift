@@ -192,7 +192,7 @@ final class FilterDataProvider: NEFilterDataProvider {
     private func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
         AppDecision(scope: result.scope, policy: result.policy, generation: result.generation,
                     decision: reason.map { Decision(allowed: false, reason: $0) } ?? result.decision,
-                    echPresent: echPresent)
+                    hostnameMode: result.hostnameMode, echPresent: echPresent)
     }
 
     private func startMaintenance() {
@@ -230,7 +230,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func emitFlow(_ facts: FlowFacts, result: AppDecision) {
         guard telemetry.shouldLog(result) else { return }
-        emit(Receipt.flow(facts, result: result, hostnameMode: snapshots.read()?.hostnameMode), privateFields: true)
+        emit(Receipt.flow(facts, result: result), privateFields: true)
     }
 
     private func controlEvent(_ event: String, reason: String, detail: String = "") {

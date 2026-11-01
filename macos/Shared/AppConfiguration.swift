@@ -186,6 +186,9 @@ struct AppDecision {
     let policy: String
     let generation: UInt32
     let decision: Decision
+    /// Mode of the snapshot that decided. A receipt written after a newer
+    /// snapshot is installed still reports this one, as it does the generation.
+    var hostnameMode: String? = nil
     var requiredTLSHost: String? = nil
     var echPresent = false
 }
@@ -198,7 +201,7 @@ enum AppEvaluator {
         }
         func unbound(_ decision: Decision) -> AppDecision {
             AppDecision(scope: AppFilterConstants.unboundScope, policy: config.id, generation: config.generation,
-                        decision: decision)
+                        decision: decision, hostnameMode: config.hostnameMode)
         }
         guard flow.direction != .unknown else {
             return unbound(Decision(allowed: false, reason: "unknown_direction"))
@@ -215,6 +218,10 @@ enum AppEvaluator {
             return unbound(Decision(allowed: config.unmatched == "allow",
                                    reason: flow.direction == .inbound ? "outside_scope_inbound" : "outside_scope"))
         }
+        func bound(_ decision: Decision, requiredTLSHost: String? = nil) -> AppDecision {
+            AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
+                        decision: decision, hostnameMode: config.hostnameMode, requiredTLSHost: requiredTLSHost)
+        }
         let decision: Decision
         if flow.direction == .inbound {
             decision = Decision(allowed: false, reason: "inbound_not_allowed")
@@ -226,12 +233,10 @@ enum AppEvaluator {
         }
         if decision.allowed && decision.reason == "allowed_by_rule" {
             guard flow.isTCP, let host = flow.hostname.flatMap(normalizeHost) else {
-                return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
-                                   decision: Decision(allowed: false, reason: "domain_requires_tls_tcp"))
+                return bound(Decision(allowed: false, reason: "domain_requires_tls_tcp"))
             }
-            return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
-                               decision: decision, requiredTLSHost: host)
+            return bound(decision, requiredTLSHost: host)
         }
-        return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation, decision: decision)
+        return bound(decision)
     }
 }

@@ -239,7 +239,7 @@ do {
     expect(settings.defaultAction == .filterData, "default flow delivery to provider")
     expect(settings.rules.count == 3 && settings.rules.allSatisfy { $0.action == .filterData }, "loopback has explicit callback rules")
     let facts = flow(process: SigningIdentity(signingID: "com.apple.service", teamID: nil))
-    let receipt = Receipt.flow(facts, result: AppEvaluator.evaluate(facts, configuration: config), hostnameMode: "ip-only")
+    let receipt = Receipt.flow(facts, result: AppEvaluator.evaluate(facts, configuration: config))
     let line = try receipt.jsonLine()
     let json = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
     expect(line.filter { $0 == "\n" }.count == 1, "one newline per receipt")

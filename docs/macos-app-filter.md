@@ -315,7 +315,9 @@ Decision receipts use the flat core schema: `ts`, `scope`, `policy`, `gen`,
 optional `status` and `dropped` fields as in the core.
 Absent optional values are omitted. Flow decisions use `point: "app_filter"` and
 `detail` identifies `backend=network_extension;scope_kind=app`, the separate
-validated app/process identities and hostname provenance.
+validated app/process identities and hostname provenance. `gen`, `policy` and
+`hostname_mode` come from the snapshot that made the decision, also when a
+held TLS handshake is logged after a newer snapshot was installed.
 Lifecycle/configuration events use `point: "control"`. String fields are cleaned
 and capped at the same byte limits as the core. Invalid UTF-8 bytes, C0/C1,
 bidi and zero-width characters become `?`; truncation preserves UTF-8 character

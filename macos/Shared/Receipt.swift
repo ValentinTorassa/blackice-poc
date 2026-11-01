@@ -30,7 +30,7 @@ struct Receipt: Encodable {
         self.scope = scope; self.policy = policy; gen = generation; self.point = point; self.event = event
     }
 
-    static func flow(_ flow: FlowFacts, result: AppDecision, hostnameMode: String?) -> Receipt {
+    static func flow(_ flow: FlowFacts, result: AppDecision) -> Receipt {
         var receipt = Receipt(scope: result.scope, policy: result.policy, generation: result.generation,
                               point: "app_filter", event: "connect")
         receipt.verdict = result.decision.allowed ? "allow" : "deny"
@@ -43,7 +43,7 @@ struct Receipt: Encodable {
         receipt.detail = "backend=network_extension;scope_kind=app;" + (result.echPresent ? "ech_present;" : "") +
             "app=\(identityLabel(flow.app));" +
             "process=\(identityLabel(flow.process));hostname_source=\(flow.hostname == nil ? "absent" : "os_metadata");" +
-            "hostname_mode=\(hostnameMode ?? "unavailable")"
+            "hostname_mode=\(result.hostnameMode ?? "unavailable")"
         return receipt
     }
 

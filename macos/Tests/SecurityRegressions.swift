@@ -129,9 +129,22 @@ func securityRegressions() throws {
     expect(TLSClientHello.inspect(clientHello("api.example.com", extra: echExtension + echExtension)) == .deny("tls_unparsed"), "duplicate ECH still rejects malformed hello")
     var marked = domain
     marked.echPresent = matchingECH.echPresent
-    let markedReceipt = Receipt.flow(flow(hostname: "api.example.com"), result: marked, hostnameMode: "os-metadata")
+    let markedReceipt = Receipt.flow(flow(hostname: "api.example.com"), result: marked)
     expect(try markedReceipt.jsonLine().contains("ech_present;"), "ECH presence appears in bounded receipt detail")
-    expect(try !Receipt.flow(flow(), result: domain, hostnameMode: "os-metadata").jsonLine().contains("ech_present"), "ordinary TLS receipts do not claim ECH")
+    expect(try !Receipt.flow(flow(), result: domain).jsonLine().contains("ech_present"), "ordinary TLS receipts do not claim ECH")
+    // A pending handshake decided under one snapshot can be logged after the next
+    // one is installed. Its receipt reports the deciding snapshot's mode, as it
+    // reports that snapshot's generation; nothing is read at logging time.
+    let decidedEarlier = try Receipt.flow(flow(hostname: "api.example.com"), result: domain).jsonLine()
+    expect(decidedEarlier.contains("hostname_mode=os-metadata") && decidedEarlier.contains("\"gen\":1"),
+           "receipt hostname mode comes from the deciding snapshot")
+    let (_, ipOnlyNext) = try configuration(gen: 2)
+    expect(try Receipt.flow(flow(), result: AppEvaluator.evaluate(flow(), configuration: ipOnlyNext)).jsonLine()
+           .contains("hostname_mode=ip-only"), "bound decision carries its snapshot's mode")
+    expect(try Receipt.flow(flow(app: other), result: AppEvaluator.evaluate(flow(app: other), configuration: domains)).jsonLine()
+           .contains("hostname_mode=os-metadata"), "unbound decision carries its snapshot's mode")
+    expect(try Receipt.flow(flow(), result: AppEvaluator.evaluate(flow(), configuration: nil)).jsonLine()
+           .contains("hostname_mode=unavailable"), "no snapshot, no mode")
     for name in ["", "evil\0.example.com", "éxample.com", "127.0.0.1", "bad..example.com"] {
         expect(TLSClientHello.inspect(clientHello(name)) == .deny("tls_unparsed"), "invalid SNI rejected")
     }

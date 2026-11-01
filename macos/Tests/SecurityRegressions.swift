@@ -81,6 +81,23 @@ func securityRegressions() throws {
                prompt.reason.contains("policy sha256 \(config.apps[0].policy.sha256.prefix(12))"), "prompt binds app identity to original policy digest")
         expect(prompt.reason.contains("Parent: test-shell (pid 42, audit only)"), "prompt exposes requesting parent without using it for authorization")
     }
+    func controlReceipt(_ prompt: AuthorizationPrompt, approved: Bool) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: Data(prompt.receipt(approved: approved).jsonLine().utf8)) as! [String: Any]
+    }
+    let (_, shownPolicy) = try configuration(gen: 7)
+    let approval = try controlReceipt(AuthorizationPrompt(action: .enable, policy: .available(shownPolicy),
+        parent: AuthorizationParent(pid: 42, name: Data("test-shell".utf8))), approved: true)
+    expect(approval["policy"] as? String == shownPolicy.id && approval["gen"] as? Int == 7 &&
+           approval["verdict"] as? String == "allow" && approval["scope"] as? String == "app-control" &&
+           (approval["detail"] as? String)?.contains("action=enable;parent_pid=42") == true,
+           "approval receipt names the configuration digest and generation the prompt showed")
+    for missing in [AuthorizationPolicy.absent, .unreadable] {
+        let refusal = try controlReceipt(AuthorizationPrompt(action: .disable, policy: missing,
+            parent: AuthorizationParent(pid: 42, name: nil)), approved: false)
+        expect(refusal["policy"] as? String == "unavailable" && refusal["gen"] as? Int == 0 &&
+               refusal["verdict"] as? String == "deny" && refusal["reason"] as? String == "user_presence_refused",
+               "refusal receipt without a saved configuration names none")
+    }
     expect(AuthorizationParent(pid: 42, name: Data("fake\n\u{202e}shell".utf8)).name == "fake??shell", "parent label control/bidi characters cannot forge prompt lines")
     expect(AuthorizationParent.current().pid > 0 && !AuthorizationParent.current().name.isEmpty, "parent label resolves on Mac without an authorization role")
     expect(AuthorizationPolicy.absent.summary.contains("none") && AuthorizationPolicy.unreadable.summary.contains("unknown"), "missing or unreadable saved policy is explicit during recovery")
@@ -94,6 +111,29 @@ func securityRegressions() throws {
     let (_, next) = try configuration(gen: 2)
     try ConfigurationUpdate.validate(next, replacing: config)
     rejects("host rejects rollback") { try ConfigurationUpdate.validate(config, replacing: next) }
+    // Requests that would be refused fail before the user is asked to authenticate.
+    let (savedData, _) = try configuration()
+    let enabled = SavedFilterState(exists: true, enabled: true, configuration: savedData)
+    let disabled = SavedFilterState(exists: true, enabled: false, configuration: savedData)
+    let nothing = SavedFilterState(exists: false, enabled: false, configuration: nil)
+    expect(HostPrecondition.refusal(.enable, candidate: config, saved: enabled) == "update_requires_higher_generation" &&
+           HostPrecondition.refusal(.enable, candidate: config, saved: disabled) == "update_requires_higher_generation",
+           "same generation refused before the prompt")
+    expect(HostPrecondition.refusal(.enable, candidate: next, saved: enabled) == nil &&
+           HostPrecondition.refusal(.enable, candidate: config, saved: nothing) == nil, "higher or first generation goes to the prompt")
+    for unreadable in [Data("{}".utf8), nil] as [Data?] {
+        expect(HostPrecondition.refusal(.enable, candidate: next, saved: SavedFilterState(exists: true, enabled: true, configuration: unreadable)) ==
+               "invalid_saved_configuration", "unreadable saved configuration refused before the prompt")
+    }
+    expect(HostPrecondition.refusal(.enable, candidate: nil, saved: nothing) == "invalid_configuration", "enable needs a candidate")
+    expect(HostPrecondition.refusal(.disable, candidate: nil, saved: nothing) == "no_owned_configuration" &&
+           HostPrecondition.refusal(.disable, candidate: nil, saved: enabled) == nil, "disable needs a saved configuration")
+    expect(HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: enabled) == "disable_before_removal" &&
+           HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: nothing) == "no_owned_configuration" &&
+           HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: disabled) == nil, "remove-config needs a disabled saved configuration")
+    expect(HostPrecondition.refusal(.deactivate, candidate: nil, saved: enabled) == "disable_before_deactivation" &&
+           HostPrecondition.refusal(.deactivate, candidate: nil, saved: nothing) == nil &&
+           HostPrecondition.refusal(.activate, candidate: nil, saved: enabled) == nil, "deactivate needs the filter disabled")
     let filterID = AppFilterConstants.extensionBundleID
     func replaces(_ installed: String, with candidate: String, id: String = AppFilterConstants.extensionBundleID) -> Bool {
         ExtensionReplacement.allowed(existingID: filterID, existingVersion: installed, candidateID: id, candidateVersion: candidate)

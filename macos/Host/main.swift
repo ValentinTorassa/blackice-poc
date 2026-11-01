@@ -32,11 +32,26 @@ func requireSignedHost() {
     }
 }
 
+extension SavedFilterState {
+    init(_ manager: NEFilterManager) {
+        self.init(exists: manager.providerConfiguration != nil, enabled: manager.isEnabled,
+                  configuration: manager.providerConfiguration?.vendorConfiguration?[AppFilterConstants.configurationKey] as? Data)
+    }
+}
+
+func refuseUnlessReady(_ action: HostAction, candidate: AppConfiguration?, _ manager: NEFilterManager) {
+    if let reason = HostPrecondition.refusal(action, candidate: candidate, saved: SavedFilterState(manager)) {
+        fail(reason)
+    }
+}
+
 func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
                        perform: @escaping (NEFilterManager) -> Void) {
     requireSignedHost()
     let parent = AuthorizationParent.current()
     loadManager { manager in
+        // A request that would be refused anyway fails before the prompt.
+        refuseUnlessReady(action, candidate: candidate, manager)
         // Capture immutable preference values before prompting, then check that
         // the policy described to the user has not changed during authentication.
         let previousVendor = manager.providerConfiguration?.vendorConfiguration as NSDictionary?
@@ -51,7 +66,7 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
         PresenceGate.perform(prompt, using: SystemPresenceAuthenticator(), announce: { reason in
             FileHandle.standardError.write(Data((reason + "\n").utf8))
         }, denied: {
-            auditControl(action, parent: parent.pid, approved: false)
+            auditControl(prompt, approved: false)
             fail("user_presence_required_or_cancelled")
         }, authorized: {
             DispatchQueue.main.async {
@@ -61,7 +76,8 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
                           previousExists == (current.providerConfiguration != nil) else {
                         fail("configuration_changed_during_authentication: review and retry")
                     }
-                    auditControl(action, parent: parent.pid, approved: true)
+                    refuseUnlessReady(action, candidate: candidate, current)
+                    auditControl(prompt, approved: true)
                     perform(current)
                 }
             }
@@ -69,14 +85,9 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
     }
 }
 
-func auditControl(_ action: HostAction, parent: pid_t, approved: Bool) {
-    var receipt = Receipt(scope: "app-control", policy: "unavailable", generation: 0,
-                          point: "control", event: "owner_authentication")
-    receipt.verdict = approved ? "allow" : "deny"
-    receipt.reason = approved ? "user_presence_confirmed" : "user_presence_refused"
-    receipt.detail = "backend=network_extension;action=\(action.rawValue);parent_pid=\(parent)"
+func auditControl(_ prompt: AuthorizationPrompt, approved: Bool) {
     let logger = Logger(subsystem: AppFilterConstants.logSubsystem, category: "control")
-    if let line = try? receipt.jsonLine() { logger.notice("\(line, privacy: .public)") }
+    if let line = try? prompt.receipt(approved: approved).jsonLine() { logger.notice("\(line, privacy: .public)") }
 }
 
 func loadManager(_ body: @escaping (NEFilterManager) -> Void) {
@@ -122,14 +133,15 @@ let usage = """
 BlackiceApp (unsigned build and qualified deployment helper)
   status
   validate CONFIG.json
-  make-config POLICY.json TEAM_ID SIGNING_ID app-SCOPE allow|deny ip-only|os-metadata
+  make-config POLICY.json TEAM_ID SIGNING_ID app-SCOPE allow|deny ip-only|os-metadata [GENERATION]
   activate
   enable CONFIG.json
   disable
   remove-config
   deactivate
 The last five commands require Developer ID signing, entitlements and fresh user authentication.
-enable updates an existing configuration in place with a strictly higher generation.
+enable updates an existing configuration in place with a strictly higher generation;
+make-config writes generation 1 unless GENERATION is given.
 An enabled preference is not a verified enforcement status.
 """
 
@@ -158,11 +170,18 @@ do {
         output(["valid": true, "configuration": config.id, "generation": config.generation,
                 "apps": config.apps.count, "hostname_mode": config.hostnameMode, "enforcement_verified": false])
         exit(0)
-    case "make-config" where args.count == 7:
+    case "make-config" where args.count == 7 || args.count == 8:
+        let generation: UInt32
+        if args.count == 8 {
+            guard let parsed = parseGeneration(args[7]) else { fail("generation_must_be_1_to_4294967295") }
+            generation = parsed
+        } else {
+            generation = 1
+        }
         let data = try readBounded(args[1])
         _ = try NetworkPolicy(data: data)
         guard let policy = String(data: data, encoding: .utf8) else { fail("policy_requires_utf8") }
-        let doc = AppConfigurationDocument(generation: 1, unmatched: args[5], hostnameMode: args[6],
+        let doc = AppConfigurationDocument(generation: generation, unmatched: args[5], hostnameMode: args[6],
             apps: [AppBindingDocument(scope: args[4], teamID: args[2], signingID: args[3], policyJSON: policy)])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
@@ -182,16 +201,6 @@ do {
         let data = try readBounded(args[1])
         let candidate = try AppConfiguration(data: data)
         withOwnerPresence(.enable, candidate: candidate) { manager in
-            do {
-                var current: AppConfiguration?
-                if let existing = manager.providerConfiguration {
-                    guard let saved = existing.vendorConfiguration?[AppFilterConstants.configurationKey] as? Data else {
-                        fail("invalid_saved_configuration")
-                    }
-                    current = try AppConfiguration(data: saved)
-                }
-                try ConfigurationUpdate.validate(candidate, replacing: current)
-            } catch { fail("update_requires_valid_higher_generation") }
             let provider = NEFilterProviderConfiguration()
             provider.filterSockets = true
             provider.filterPackets = false
@@ -210,7 +219,6 @@ do {
         }
     case "disable" where args.count == 1:
         withOwnerPresence(.disable) { manager in
-            guard manager.providerConfiguration != nil else { fail("no_owned_configuration") }
             manager.isEnabled = false
             manager.saveToPreferences { error in
                 guard error == nil else { fail("filter_disable_failed") }
@@ -219,16 +227,13 @@ do {
         }
     case "remove-config" where args.count == 1:
         withOwnerPresence(.removeConfiguration) { manager in
-            guard !manager.isEnabled else { fail("disable_before_removal") }
-            guard manager.providerConfiguration != nil else { fail("no_owned_configuration") }
             manager.removeFromPreferences { error in
                 guard error == nil else { fail("filter_remove_failed") }
                 output(["state": "owned_configuration_removed", "enforcement_verified": false]); exit(0)
             }
         }
     case "deactivate" where args.count == 1:
-        withOwnerPresence(.deactivate) { manager in
-            guard !manager.isEnabled else { fail("disable_before_deactivation") }
+        withOwnerPresence(.deactivate) { _ in
             let request = OSSystemExtensionRequest.deactivationRequest(forExtensionWithIdentifier: AppFilterConstants.extensionBundleID,
                                                                       queue: .main)
             request.delegate = delegate

@@ -132,6 +132,14 @@ APP=./macos/build/Blackice.app/Contents/MacOS/BlackiceApp
 "$APP" validate /tmp/apps.json
 ```
 
+`make-config` writes generation 1. `enable` replaces a saved configuration only
+with a strictly higher generation, so give the replacement one as a last
+argument:
+
+```sh
+"$APP" make-config ./macos/Examples/allow-test-subnet.json ABCDE12345 com.example.probe app-probe allow ip-only 2 > /tmp/apps-2.json
+```
+
 The Team ID and signing identifier above are synthetic; substitute a real signed
 probe before future activation. Both examples use documentation addresses;
 `allow-test-subnet.json` is an evaluator fixture, not a real reachable service.
@@ -178,8 +186,11 @@ The strict wrapper schema (JSON Schema 2020-12) is:
         "required": ["scope", "team_id", "signing_id", "policy_json", "policy_sha256"],
         "properties": {
           "scope": {
-            "type": "string", "minLength": 4, "maxLength": 64,
-            "pattern": "^app-", "not": { "pattern": "[^A-Za-z0-9_.-]" }
+            "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^app-",
+            "not": { "anyOf": [
+              { "pattern": "[^A-Za-z0-9_.-]" },
+              { "enum": ["app-unbound", "app-unavailable", "app-provider", "app-control"] }
+            ] }
           },
           "team_id": {
             "type": "string", "minLength": 10, "maxLength": 10,
@@ -221,6 +232,9 @@ The parser also enforces constraints that this wrapper schema cannot express:
   migration or relaxed fallback. `make-config` emits only the approved version.
 
 Scope names start with `app-`. Duplicate scopes or identity pairs are rejected.
+`app-unbound`, `app-unavailable`, `app-provider` and `app-control` are reserved
+(`reserved_scope`): the provider and host write them in their own receipts, and a
+binding with one of those names would be indistinguishable from them.
 The provider validates the full candidate before installing a snapshot under a
 lock. During a provider lifetime, a lower generation, or a different snapshot
 at the same generation (compared by the full SHA-256 of the configuration
@@ -316,8 +330,11 @@ Absent optional values are omitted. Flow decisions use `point: "app_filter"` and
 validated app/process identities and hostname provenance.
 Lifecycle/configuration events use `point: "control"`; `policy_activated` is
 emitted only when an update installs a new snapshot, and a successful start logs
-`scope_start` before any update it catches up on. A flow receipt's `hostname_mode` is that of the snapshot
-that decided the flow. String fields are cleaned
+`scope_start` before any update it catches up on. A refused startup or update
+records why in `detail` as `cause=<reason>` (for example `stale_generation` or
+`policy_sha256_mismatch`); decoder errors, which can quote the input, all become
+`cause=invalid_configuration_document`. A flow receipt's `hostname_mode` is that
+of the snapshot that decided the flow. String fields are cleaned
 and capped at the same byte limits as the core. Invalid UTF-8 bytes, C0/C1,
 bidi and zero-width characters become `?`; truncation preserves UTF-8 character
 boundaries and appends `...`. The raw-byte cleaner handles malformed UTF-8 before
@@ -357,7 +374,9 @@ This command produces unified-log envelopes. Per-flow JSON (including destinatio
 and identities) is marked private and is normally shown as `<private>` under the
 OS privacy policy. Public control records contain lifecycle state, aggregate
 counts or host authorization outcomes, never connection destinations. The host
-uses category `control` for user-presence results and includes the requesting
+uses category `control` for user-presence results. Each one's `policy` and `gen`
+are the configuration digest and generation that the prompt showed (`unavailable`
+and 0 when nothing readable was saved), and its `detail` includes the requesting
 host's parent PID for audit only; that PID never authorizes anything. No payloads,
 complete URLs, raw audit tokens, executable paths, credentials or environment
 variables are logged. Retention follows OS policy; no logging privacy settings
@@ -482,8 +501,14 @@ aborts the operation and requires review and retry. No app binding is silently
 omitted from the summary; real dialog layout remains a signed-run test gate.
 Touch ID reuse duration is zero. Cancellation, unavailable
 authentication or failure prevents the mutation; there is no CLI/environment
-bypass or cached owner authorization. A confined app cannot change the filter
-through this helper without user authentication. This does not prevent a user
+bypass or cached owner authorization. A request that would be refused anyway
+fails before the prompt, so no approval is spent on it: `enable` with a
+generation that is not above the saved one (`update_requires_higher_generation`)
+or over an unreadable saved configuration (`invalid_saved_configuration`),
+`disable` or `remove-config` with nothing saved (`no_owned_configuration`), and
+`remove-config` or `deactivate` while the filter is enabled. The same checks run
+again on the preferences reloaded after authentication. A confined app cannot
+change the filter through this helper without user authentication. This does not prevent a user
 from approving a malicious request or using macOS's own administration controls.
 macOS separately enforces entitlement/profile and system-consent requirements.
 
@@ -539,6 +564,11 @@ process still fails closed. Fake authenticators test denial and
 approval for every mutating command without prompting the user or changing
 preferences. Prompt tests check policy digests, identities, generation/unmatched
 changes, parent-label cleaning and identical terminal/authentication text.
+Precondition tests check the refusal the host applies before the prompt for
+each action and saved state (the host CLI itself is not part of the test
+executable), and that owner-authentication receipts carry the shown digest and
+generation. Size, nesting and generation refusals are checked by their reason,
+with valid input on the accepted side of each limit.
 TLS tests port the proxy's ClientHello vectors and add truncated
 prefixes, callback slicing, exact-SNI mismatch, plaintext HTTP, UDP, ECH,
 duplicate extensions, invalid names and buffer limits. These tests do not replace

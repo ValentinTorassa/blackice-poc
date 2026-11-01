@@ -62,6 +62,20 @@ struct AuthorizationPrompt {
     var reason: String {
         "\(action.reason). \(policy.summary). Parent: \(parent.name) (pid \(parent.pid), audit only)."
     }
+
+    /// The control receipt for one user-presence result. It carries the
+    /// configuration digest and generation this prompt showed, so an approval
+    /// in the log can be matched to what was approved.
+    func receipt(approved: Bool) -> Receipt {
+        let shown: AppConfiguration?
+        if case .available(let config) = policy { shown = config } else { shown = nil }
+        var receipt = Receipt(scope: AppFilterConstants.controlScope, policy: shown?.id ?? "unavailable",
+                              generation: shown?.generation ?? 0, point: "control", event: "owner_authentication")
+        receipt.verdict = approved ? "allow" : "deny"
+        receipt.reason = approved ? "user_presence_confirmed" : "user_presence_refused"
+        receipt.detail = "backend=network_extension;action=\(action.rawValue);parent_pid=\(parent.pid)"
+        return receipt
+    }
 }
 
 /// New context per operation, no cached authorization or environment/CLI bypass.
@@ -94,6 +108,41 @@ enum PresenceGate {
         announce(reason)
         authenticator.authenticate(reason: reason) { success in
             if success { authorized() } else { denied() }
+        }
+    }
+}
+
+/// The saved filter preference as the host loaded it.
+struct SavedFilterState {
+    let exists: Bool
+    let enabled: Bool
+    let configuration: Data?
+}
+
+enum HostPrecondition {
+    /// Why an action would be refused. The host checks this before asking for
+    /// user presence, so an approval is never spent on a request that fails
+    /// anyway, and again on the state it reloads after authentication.
+    static func refusal(_ action: HostAction, candidate: AppConfiguration?, saved: SavedFilterState) -> String? {
+        switch action {
+        case .activate:
+            return nil
+        case .enable:
+            guard let candidate else { return "invalid_configuration" }
+            guard saved.exists else { return nil }
+            guard let data = saved.configuration, let current = try? AppConfiguration(data: data) else {
+                return "invalid_saved_configuration"
+            }
+            do { try ConfigurationUpdate.validate(candidate, replacing: current) }
+            catch { return "update_requires_higher_generation" }
+            return nil
+        case .disable:
+            return saved.exists ? nil : "no_owned_configuration"
+        case .removeConfiguration:
+            if saved.enabled { return "disable_before_removal" }
+            return saved.exists ? nil : "no_owned_configuration"
+        case .deactivate:
+            return saved.enabled ? "disable_before_deactivation" : nil
         }
     }
 }

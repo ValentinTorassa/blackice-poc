@@ -13,7 +13,7 @@ final class FlowTelemetry {
 
     /// True only when a per-flow diagnostic is appropriate (bound app or error).
     func shouldLog(_ result: AppDecision) -> Bool {
-        guard result.scope == "app-unbound", result.decision.reason.hasPrefix("outside_scope") else { return true }
+        guard result.scope == AppFilterConstants.unboundScope, result.decision.reason.hasPrefix("outside_scope") else { return true }
         lock.lock(); defer { lock.unlock() }
         if result.decision.allowed { counts.allowed = counts.allowed == .max ? .max : counts.allowed + 1 }
         else { counts.denied = counts.denied == .max ? .max : counts.denied + 1 }

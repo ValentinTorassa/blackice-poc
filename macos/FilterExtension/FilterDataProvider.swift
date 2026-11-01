@@ -66,7 +66,8 @@ final class FilterDataProvider: NEFilterDataProvider {
             }
         } catch {
             snapshots.clear()
-            controlEvent("warning", reason: "invalid_start_configuration")
+            controlEvent("warning", reason: "invalid_start_configuration",
+                         detail: ";cause=\(ConfigurationError.cause(of: error))")
             completionHandler(ConfigurationError.invalid("invalid_start_configuration"))
         }
     }
@@ -100,7 +101,8 @@ final class FilterDataProvider: NEFilterDataProvider {
             controlEvent("policy_activated", reason: "snapshot_installed")
         } catch {
             // Invalid or stale updates cannot replace a working snapshot.
-            controlEvent("warning", reason: "configuration_update_rejected")
+            controlEvent("warning", reason: "configuration_update_rejected",
+                         detail: ";cause=\(ConfigurationError.cause(of: error))")
         }
     }
 
@@ -235,7 +237,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func controlEvent(_ event: String, reason: String, detail: String = "") {
         let config = snapshots.read()
-        var receipt = Receipt(scope: "app-provider", policy: config?.id ?? "unavailable",
+        var receipt = Receipt(scope: AppFilterConstants.providerScope, policy: config?.id ?? "unavailable",
                               generation: config?.generation ?? 0, point: "control", event: event)
         receipt.reason = reason
         receipt.detail = "backend=network_extension;scope_kind=app;durable_receipts=unavailable" + detail

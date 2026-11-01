@@ -588,9 +588,8 @@ const Connection = struct {
     }
 
     /// App scopes only: decides again, after the dial and before any byte is forwarded, with the binding in force
-    /// now. A policy change published while the proxy resolved and dialed is applied here, so the upstream
-    /// never gets a byte the new policy refuses; from here on the watchdog covers the open connection.
-    /// False, with `d` filled as a refusal.
+    /// now. A policy change published while the proxy resolved and dialed is applied here, before the first
+    /// byte; one published after this check is left to the watchdog. False, with `d` filled as a refusal.
     fn recheck(c: *Connection, d: *Decision) bool {
         if (c.p.config.live == null) return true;
         if (!c.bindNow(d)) {

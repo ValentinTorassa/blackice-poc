@@ -130,6 +130,14 @@ APP=./macos/build/Blackice.app/Contents/MacOS/BlackiceApp
 "$APP" validate /tmp/apps.json
 ```
 
+`make-config` writes generation 1. `enable` replaces a saved configuration only
+with a strictly higher generation, so give the replacement one as a last
+argument:
+
+```sh
+"$APP" make-config ./macos/Examples/allow-test-subnet.json ABCDE12345 com.example.probe app-probe allow ip-only 2 > /tmp/apps-2.json
+```
+
 The Team ID and signing identifier above are synthetic; substitute a real signed
 probe before future activation. Both examples use documentation addresses;
 `allow-test-subnet.json` is an evaluator fixture, not a real reachable service.

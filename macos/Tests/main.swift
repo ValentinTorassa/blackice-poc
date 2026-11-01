@@ -173,6 +173,11 @@ do {
     rejects("domain policy unsupported in IP-only mode") { _ = try configuration(policy: #"{"mode":"allowlist","allow":["example.com"]}"#) }
     rejects("explicit unmatched required") { _ = try configuration(unmatched: "") }
     rejects("generation zero rejected") { _ = try configuration(gen: 0) }
+    expect(parseGeneration("1") == 1 && parseGeneration("2") == 2 && parseGeneration("4294967295") == UInt32.max,
+           "make-config generation argument")
+    for text in ["", "0", "-1", "+2", " 2", "2 ", "4294967296", "0x2", "\u{0662}"] {
+        expect(parseGeneration(text) == nil, "make-config refuses generation \(text.debugDescription)")
+    }
     let (document, _) = try configuration()
     var object = try JSONSerialization.jsonObject(with: document) as! [String: Any]
     object["unknown_identity"] = "allow"

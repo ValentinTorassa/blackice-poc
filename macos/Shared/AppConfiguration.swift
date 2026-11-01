@@ -66,6 +66,13 @@ func validSigningID(_ text: String) -> Bool {
     }
 }
 
+/// A generation typed on the command line: ASCII digits only, 1 through UInt32.max.
+func parseGeneration(_ text: String) -> UInt32? {
+    guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }),
+          let value = UInt32(text), value > 0 else { return nil }
+    return value
+}
+
 func validTeamID(_ text: String) -> Bool {
     text.utf8.count == 10 && text.utf8.allSatisfy { (65...90).contains($0) || (48...57).contains($0) }
 }

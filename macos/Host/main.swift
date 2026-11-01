@@ -127,14 +127,15 @@ let usage = """
 BlackiceApp (unsigned build and qualified deployment helper)
   status
   validate CONFIG.json
-  make-config POLICY.json TEAM_ID SIGNING_ID app-SCOPE allow|deny ip-only|os-metadata
+  make-config POLICY.json TEAM_ID SIGNING_ID app-SCOPE allow|deny ip-only|os-metadata [GENERATION]
   activate
   enable CONFIG.json
   disable
   remove-config
   deactivate
 The last five commands require Developer ID signing, entitlements and fresh user authentication.
-enable updates an existing configuration in place with a strictly higher generation.
+enable updates an existing configuration in place with a strictly higher generation;
+make-config writes generation 1 unless GENERATION is given.
 An enabled preference is not a verified enforcement status.
 """
 
@@ -163,11 +164,18 @@ do {
         output(["valid": true, "configuration": config.id, "generation": config.generation,
                 "apps": config.apps.count, "hostname_mode": config.hostnameMode, "enforcement_verified": false])
         exit(0)
-    case "make-config" where args.count == 7:
+    case "make-config" where args.count == 7 || args.count == 8:
+        let generation: UInt32
+        if args.count == 8 {
+            guard let parsed = parseGeneration(args[7]) else { fail("generation_must_be_1_to_4294967295") }
+            generation = parsed
+        } else {
+            generation = 1
+        }
         let data = try readBounded(args[1])
         _ = try NetworkPolicy(data: data)
         guard let policy = String(data: data, encoding: .utf8) else { fail("policy_requires_utf8") }
-        let doc = AppConfigurationDocument(generation: 1, unmatched: args[5], hostnameMode: args[6],
+        let doc = AppConfigurationDocument(generation: generation, unmatched: args[5], hostnameMode: args[6],
             apps: [AppBindingDocument(scope: args[4], teamID: args[2], signingID: args[3], policyJSON: policy)])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]

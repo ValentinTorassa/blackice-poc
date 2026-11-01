@@ -420,7 +420,7 @@ h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .state { display: inline-flex; align-items: center; gap: 8px; font: 13px var(--mono); font-weight: 400; color: var(--fg-2); white-space: nowrap; }
 .state-dot { width: 7px; height: 7px; border-radius: 50%; background: #3a3a3a; }
 .state-designed .state-dot { background: #7d7d7d; }
-.state-built .state-dot, .state-unsigned .state-dot { background: var(--amber); box-shadow: 0 0 8px rgba(255, 178, 36, 0.55); }
+.state-built .state-dot, .state-unsigned .state-dot, .state-vmonly .state-dot { background: var(--amber); box-shadow: 0 0 8px rgba(255, 178, 36, 0.55); }
 .state-verified .state-dot, .state-recorded .state-dot { background: var(--green); box-shadow: 0 0 8px rgba(70, 167, 88, 0.6); }
 .state-verified, .state-recorded { color: var(--fg); }
 .state-findings .state-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-2); }

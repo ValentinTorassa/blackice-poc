@@ -307,7 +307,7 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
         <p>Before a first usable release, beyond v0:</p>
         <ul>
           <li>App control on macOS: the Network Extension filter, signed with a Developer ID.</li>
-          <li>App control on Linux: a first build is in review, not cleared.</li>
+          <li>App control on Linux: built, but run only in a virtual machine so far.</li>
           <li>Owner authentication for grants, beyond &quot;same user, outside every scope&quot;.</li>
           <li>Protocols other than HTTP and TLS through the proxy.</li>
           <li>Listening inside a scope, for dev servers and tests that open a port.</li>
@@ -348,7 +348,7 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
         <p>
           An app that is already on the machine. On macOS, a Network Extension filter will identify apps by their
           code-signing identity, not their process name, and apply the same policy format and receipts. App scopes will
-          not need {SITE.name} to launch the app. On Linux, a first build is in review, not cleared.
+          not need {SITE.name} to launch the app. On Linux, the app filter is built but has run only in a virtual machine.
         </p>
         <H2>Host ceiling</H2>
         <p>One policy, administered by the owner, over the whole machine. Every other scope will sit under it.</p>
@@ -634,8 +634,9 @@ ${SITE.name} revoke <scope> <host>`}</Code>
           <a href="https://github.com/ValentinTorassa/blackice/blob/main/docs/linux.md">docs/linux.md</a>.
         </p>
         <p>
-          <strong>Apps.</strong> In review, not cleared: a first build and the fixes from its security review. Kernel
-          tests in a virtual machine and a security clearance come before any install. The hard part is telling apps
+          <strong>Apps.</strong> Built as experimental code that has run only in a virtual machine. A policy can be
+          reloaded while apps run: narrowing it cuts only the connections it no longer allows. A rerun in the virtual
+          machine on the merged code and a careful first install come before any real machine. The hard part is telling apps
           apart without trusting process names or racing PIDs.
         </p>
       </>

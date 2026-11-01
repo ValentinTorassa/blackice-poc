@@ -32,7 +32,7 @@ A cell says Tested only when it has entries in [`evidence/`](evidence/).
 | | Apps | Tasks |
 |---|---|---|
 | macOS | Built, waiting for Developer ID signing: a Network Extension content filter ([#8](https://github.com/ValentinTorassa/blackice/pull/8)). | Tested. A Seatbelt sandbox profile plus a local proxy. Experimental, because Apple has deprecated `sandbox-exec`. |
-| Linux | In review: a first build, not cleared or installed yet. | Tested on Debian 13 (x86_64). cgroup v2 with eBPF socket programs plus a local proxy, and a small helper that a setup script installs with sudo. |
+| Linux | Built as experimental code ([#39](https://github.com/ValentinTorassa/blackice/pull/39)). It has run only in a virtual machine and is not ready to install. | Tested on Debian 13 (x86_64). cgroup v2 with eBPF socket programs plus a local proxy, and a small helper that a setup script installs with sudo. |
 | Windows | Later | Later |
 
 A task is a command, such as one an AI agent runs, and everything that command starts. An app is a program

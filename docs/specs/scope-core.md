@@ -94,7 +94,7 @@ loopback ports; names and addresses are then decided by the proxy.
 | Create each scope's state directory exclusively (0700), with a new id on a clash | lead | done | |
 | `run` handles INT, TERM and HUP: cancel through the backend, wait for its cleanup, write `scope_end` as cancelled. Today SIGTERM and Ctrl-C leave no `scope_end` (P0-06 finding P6-2) | lead | todo | |
 | A helper or launch failure exits 125 (cannot set up the scope), not 127 (P0-06 finding P6-3) | lead | todo | |
-| Linux enforcing backend behind the same contract (PR #6, not merged; `run` refuses on Linux until it lands) | codex-linux | done | |
+| Linux enforcing backend behind the same contract (#20) | codex-linux | done | |
 
 ## Evidence
 

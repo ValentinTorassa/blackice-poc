@@ -8,7 +8,8 @@ runs natively on macOS and Linux, headless, with no per-connection prompts, no a
 Today it works for tasks. You put it in front of a command: `blackice run --policy policy.json -- <command>`.
 The command and every process it starts can then reach only the destinations the policy allows. The limit is
 in place before the command runs, nothing inside can widen it, and every decision leaves a receipt. For apps,
-the macOS app filter is built and waits for Developer ID signing, and the Linux app filter is in review.
+the macOS app filter is built and waits for Developer ID signing, and the Linux app filter is built but has run
+only in a virtual machine.
 blackice is at v0 and not production-ready.
 
 ## Design
@@ -56,7 +57,7 @@ was shown working.
 | | Tasks | Apps |
 |---|---|---|
 | **macOS** | Shown on one Mac in the entries above. Not shown yet: launches through `open` or Apple Events refused, fx with a real model through the relay. | Built, unsigned, in #8: a Network Extension filter. It has never been activated. Needs an Apple Developer ID, a signed Network Extension, tests on a live system, and receipts written through blackice. |
-| **Linux** | Shown on one Debian 13 machine in the entries above. A small helper is set up by a script run with sudo, again after each reboot (cgroups do not persist). The first two real runs on 30 Oct failed closed before the command ran, and were fixed. Not shown yet: aarch64, fx, other distributions. On Ubuntu 24.04 and later, where `kernel.apparmor_restrict_unprivileged_userns=1` is the default, scopes are expected to fail closed. | In review, not cleared: a first build and the fixes from its security review. Kernel tests in a virtual machine and a security clearance come before any install. |
+| **Linux** | Shown on one Debian 13 machine in the entries above. A small helper is set up by a script run with sudo, again after each reboot (cgroups do not persist). The first two real runs on 30 Oct failed closed before the command ran, and were fixed. Not shown yet: aarch64, fx, other distributions. On Ubuntu 24.04 and later, where `kernel.apparmor_restrict_unprivileged_userns=1` is the default, scopes are expected to fail closed. | Built as experimental code in #39, with live policy reload. It has run only in a virtual machine. A rerun there on the merged code and a first install done one step at a time, each with a stop rule, come before any real machine. |
 
 Windows comes after macOS and Linux. Nothing is built for it.
 

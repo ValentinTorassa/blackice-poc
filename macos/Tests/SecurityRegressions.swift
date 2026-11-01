@@ -49,6 +49,18 @@ func securityRegressions() throws {
     let (_, allowAll) = try configuration(policy: #"{"mode":"allow-all"}"#)
     let boundInbound = AppEvaluator.evaluate(flow(direction: .inbound), configuration: allowAll)
     expect(!boundInbound.decision.allowed && boundInbound.decision.reason == "inbound_not_allowed", "allow-all does not open inbound listener")
+    let unboundUnknown = AppEvaluator.evaluate(flow(app: other, direction: .unknown), configuration: config)
+    expect(unboundUnknown.decision.allowed && unboundUnknown.decision.reason == "outside_scope", "unbound app with unknown direction follows unmatched allow")
+    expect(!AppEvaluator.evaluate(flow(app: other, direction: .unknown), configuration: denyUnmatched).decision.allowed, "unbound app with unknown direction follows unmatched deny")
+    let adHocUnknown = AppEvaluator.evaluate(flow(direction: .unknown, resolution: .adHoc), configuration: config)
+    expect(adHocUnknown.decision.allowed && adHocUnknown.decision.reason == "outside_scope_adhoc", "ad hoc unknown direction follows unmatched allow")
+    expect(!AppEvaluator.evaluate(flow(direction: .unknown, resolution: .adHoc), configuration: denyUnmatched).decision.allowed, "ad hoc unknown direction follows unmatched deny")
+    let boundUnknown = AppEvaluator.evaluate(flow(direction: .unknown), configuration: allowAll)
+    expect(!boundUnknown.decision.allowed && boundUnknown.decision.reason == "unknown_direction" && boundUnknown.scope == "app-probe", "bound app with unknown direction denies in its own scope")
+    for identity in [IdentityResolution.unresolved, .invalidSignature] {
+        let failed = AppEvaluator.evaluate(flow(direction: .unknown, resolution: identity), configuration: config)
+        expect(!failed.decision.allowed && failed.decision.reason == "unknown_app_identity", "failed identity with unknown direction still denies")
+    }
 
     for action in HostAction.allCases {
         let reject = FakePresence(accepts: false), accept = FakePresence(accepts: true)
@@ -82,10 +94,33 @@ func securityRegressions() throws {
     let (_, next) = try configuration(gen: 2)
     try ConfigurationUpdate.validate(next, replacing: config)
     rejects("host rejects rollback") { try ConfigurationUpdate.validate(config, replacing: next) }
+    let filterID = AppFilterConstants.extensionBundleID
+    func replaces(_ installed: String, with candidate: String, id: String = AppFilterConstants.extensionBundleID) -> Bool {
+        ExtensionReplacement.allowed(existingID: filterID, existingVersion: installed, candidateID: id, candidateVersion: candidate)
+    }
+    for (installed, candidate) in [("1", "2"), ("1", "1"), ("1", "1.0"), ("1.0", "1"), ("1.9", "1.10"), ("2.0.1", "2.1")] {
+        expect(replaces(installed, with: candidate), "activation replaces \(installed) with \(candidate)")
+    }
+    for (installed, candidate) in [("2", "1"), ("1.10", "1.9"), ("1.0.1", "1"), ("1", "0")] {
+        expect(!replaces(installed, with: candidate), "activation refuses downgrade \(installed) to \(candidate)")
+    }
+    for malformed in ["", "a", "1.a", "-1", "1..2", "1.2.3.4", " 1", "1 ", "+1", "1234567890"] {
+        expect(!replaces("1", with: malformed) && !replaces(malformed, with: "1"), "unparseable bundle version refuses replacement: \(malformed)")
+    }
+    expect(!replaces("1", with: "2", id: "com.example.other.filter"), "activation never replaces with another bundle ID")
 
     let (_, domains) = try configuration(policy: #"{"mode":"allowlist","allow":["*.example.com"]}"#, hostnameMode: "os-metadata")
     let domain = AppEvaluator.evaluate(flow(hostname: "API.Example.com."), configuration: domains)
     expect(domain.requiredTLSHost == "api.example.com", "domain allow waits for exact normalized SNI")
+    expect(domain.hostnameMode == "os-metadata", "bound decision carries its snapshot's hostname mode")
+    expect(AppEvaluator.evaluate(flow(app: other), configuration: config).hostnameMode == "ip-only", "unbound decision carries its snapshot's hostname mode")
+    expect(AppEvaluator.evaluate(flow(), configuration: nil).hostnameMode == nil, "no snapshot, no hostname mode")
+    for denial in [String?.none, "tls_timeout", "policy_changed"] {
+        let settled = FilterDataProvider.resolved(domain, denied: denial, echPresent: true)
+        expect(settled.hostnameMode == "os-metadata" && settled.echPresent, "TLS outcome keeps the deciding snapshot's hostname mode")
+        let line = try Receipt.flow(flow(hostname: "api.example.com"), result: settled, hostnameMode: settled.hostnameMode).jsonLine()
+        expect(line.contains("hostname_mode=os-metadata"), "TLS outcome receipt reports the deciding snapshot's hostname mode")
+    }
     let udp = AppEvaluator.evaluate(flow(hostname: "api.example.com", tcp: false), configuration: domains)
     expect(!udp.decision.allowed && udp.decision.reason == "domain_requires_tls_tcp", "domain cannot authorize UDP/QUIC")
     let (_, subnet) = try configuration(policy: #"{"mode":"allowlist","subnets":{"allow":["198.51.100.0/24"]}}"#)

@@ -182,14 +182,15 @@ do {
     object["apps"] = bindings + bindings
     rejects("duplicate binding rejected") { _ = try AppConfiguration(data: JSONSerialization.data(withJSONObject: object)) }
     expect(!validTeamID("A\" OR true") && !validSigningID("com.a\" or true"), "requirement injection rejected")
+    expect(config.sha256.count == 64 && config.id == String(config.sha256.prefix(12)), "configuration keeps its full SHA-256; the ID is its prefix")
     let snapshots = SnapshotStore()
-    try snapshots.install(config)
-    try snapshots.install(config)
+    expect(try snapshots.install(config), "first snapshot installs")
+    expect(try !snapshots.install(config), "same configuration again is not a new snapshot")
     let (_, changed) = try configuration(policy: #"{"mode":"allow-all"}"#)
     rejects("same generation different policy rejected") { try snapshots.install(changed) }
-    expect(snapshots.read()?.id == config.id, "failed update retains snapshot")
+    expect(snapshots.read()?.sha256 == config.sha256, "failed update retains snapshot")
     let (_, second) = try configuration(gen: 2)
-    try snapshots.install(second)
+    expect(try snapshots.install(second), "higher generation installs a new snapshot")
     rejects("stale generation rejected") { try snapshots.install(config) }
     snapshots.clear()
     expect(snapshots.read() == nil, "stop clears snapshot")

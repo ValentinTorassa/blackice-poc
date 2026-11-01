@@ -52,10 +52,15 @@ func securityRegressions() throws {
     let unboundUnknown = AppEvaluator.evaluate(flow(app: other, direction: .unknown), configuration: config)
     expect(unboundUnknown.decision.allowed && unboundUnknown.decision.reason == "outside_scope", "unbound app with unknown direction follows unmatched allow")
     expect(!AppEvaluator.evaluate(flow(app: other, direction: .unknown), configuration: denyUnmatched).decision.allowed, "unbound app with unknown direction follows unmatched deny")
-    expect(AppEvaluator.evaluate(flow(direction: .unknown, resolution: .adHoc), configuration: config).decision.reason == "outside_scope_adhoc", "ad hoc unknown direction follows unmatched")
+    let adHocUnknown = AppEvaluator.evaluate(flow(direction: .unknown, resolution: .adHoc), configuration: config)
+    expect(adHocUnknown.decision.allowed && adHocUnknown.decision.reason == "outside_scope_adhoc", "ad hoc unknown direction follows unmatched allow")
+    expect(!AppEvaluator.evaluate(flow(direction: .unknown, resolution: .adHoc), configuration: denyUnmatched).decision.allowed, "ad hoc unknown direction follows unmatched deny")
     let boundUnknown = AppEvaluator.evaluate(flow(direction: .unknown), configuration: allowAll)
     expect(!boundUnknown.decision.allowed && boundUnknown.decision.reason == "unknown_direction" && boundUnknown.scope == "app-probe", "bound app with unknown direction denies in its own scope")
-    expect(AppEvaluator.evaluate(flow(direction: .unknown, resolution: .invalidSignature), configuration: config).decision.reason == "unknown_app_identity", "failed identity with unknown direction still denies")
+    for identity in [IdentityResolution.unresolved, .invalidSignature] {
+        let failed = AppEvaluator.evaluate(flow(direction: .unknown, resolution: identity), configuration: config)
+        expect(!failed.decision.allowed && failed.decision.reason == "unknown_app_identity", "failed identity with unknown direction still denies")
+    }
 
     for action in HostAction.allCases {
         let reject = FakePresence(accepts: false), accept = FakePresence(accepts: true)
@@ -110,6 +115,12 @@ func securityRegressions() throws {
     expect(domain.hostnameMode == "os-metadata", "bound decision carries its snapshot's hostname mode")
     expect(AppEvaluator.evaluate(flow(app: other), configuration: config).hostnameMode == "ip-only", "unbound decision carries its snapshot's hostname mode")
     expect(AppEvaluator.evaluate(flow(), configuration: nil).hostnameMode == nil, "no snapshot, no hostname mode")
+    for denial in [String?.none, "tls_timeout", "policy_changed"] {
+        let settled = FilterDataProvider.resolved(domain, denied: denial, echPresent: true)
+        expect(settled.hostnameMode == "os-metadata" && settled.echPresent, "TLS outcome keeps the deciding snapshot's hostname mode")
+        let line = try Receipt.flow(flow(hostname: "api.example.com"), result: settled, hostnameMode: settled.hostnameMode).jsonLine()
+        expect(line.contains("hostname_mode=os-metadata"), "TLS outcome receipt reports the deciding snapshot's hostname mode")
+    }
     let udp = AppEvaluator.evaluate(flow(hostname: "api.example.com", tcp: false), configuration: domains)
     expect(!udp.decision.allowed && udp.decision.reason == "domain_requires_tls_tcp", "domain cannot authorize UDP/QUIC")
     let (_, subnet) = try configuration(policy: #"{"mode":"allowlist","subnets":{"allow":["198.51.100.0/24"]}}"#)

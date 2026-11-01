@@ -56,10 +56,11 @@ final class FilterDataProvider: NEFilterDataProvider {
                             self.reloadConfiguration()
                         }
                     }
-                    // Also catches a preference change while applySettings was pending.
+                    self.controlEvent("scope_start", reason: "filter_settings_applied")
+                    // Also catches a preference change while applySettings was pending,
+                    // after scope_start so a start always begins with it.
                     self.reloadConfiguration()
                     self.startMaintenance()
-                    self.controlEvent("scope_start", reason: "filter_settings_applied")
                     completionHandler(nil)
                 }
             }
@@ -140,7 +141,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             // 256 * 16 KiB transient peek data at most, plus fixed metadata.
             guard pending.count < 256, pending[flow.identifier] == nil else {
                 pendingLock.unlock()
-                emitFlow(facts, result: resolved(result, denied: "tls_capacity"))
+                emitFlow(facts, result: Self.resolved(result, denied: "tls_capacity"))
                 return .drop()
             }
             pending[flow.identifier] = PendingTLS(flow: socket, facts: facts, result: result,
@@ -170,11 +171,11 @@ final class FilterDataProvider: NEFilterDataProvider {
             return .init(passBytes: 0, peekBytes: total)
         case .serverName:
             pending.removeValue(forKey: flow.identifier)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: nil, echPresent: entry.inspection.echPresent))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: nil, echPresent: entry.inspection.echPresent))
             return .allow()
         case .deny(let reason):
             pending.removeValue(forKey: flow.identifier)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: reason, echPresent: entry.inspection.echPresent))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: reason, echPresent: entry.inspection.echPresent))
             return .drop()
         }
     }
@@ -183,11 +184,12 @@ final class FilterDataProvider: NEFilterDataProvider {
         pendingLock.lock()
         let entry = pending.removeValue(forKey: flow.identifier)
         pendingLock.unlock()
-        if let entry { emitFlow(entry.facts, result: resolved(entry.result, denied: "tls_unparsed")) }
+        if let entry { emitFlow(entry.facts, result: Self.resolved(entry.result, denied: "tls_unparsed")) }
         return .drop()
     }
 
-    private func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
+    /// A pending decision after the TLS check or a drop; keeps the deciding snapshot's hostname mode.
+    static func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
         AppDecision(scope: result.scope, policy: result.policy, generation: result.generation,
                     decision: reason.map { Decision(allowed: false, reason: $0) } ?? result.decision,
                     echPresent: echPresent, hostnameMode: result.hostnameMode)
@@ -215,7 +217,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         pendingLock.unlock()
         for entry in removed.values {
             update(entry.flow, using: .drop(), for: .outbound)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: reason))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: reason))
         }
     }
 

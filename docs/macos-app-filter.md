@@ -315,8 +315,8 @@ Absent optional values are omitted. Flow decisions use `point: "app_filter"` and
 `detail` identifies `backend=network_extension;scope_kind=app`, the separate
 validated app/process identities and hostname provenance.
 Lifecycle/configuration events use `point: "control"`; `policy_activated` is
-emitted only when an update installs a new snapshot, so a provider start begins
-with `scope_start`. A flow receipt's `hostname_mode` is that of the snapshot
+emitted only when an update installs a new snapshot, and a successful start logs
+`scope_start` before any update it catches up on. A flow receipt's `hostname_mode` is that of the snapshot
 that decided the flow. String fields are cleaned
 and capped at the same byte limits as the core. Invalid UTF-8 bytes, C0/C1,
 bidi and zero-width characters become `?`; truncation preserves UTF-8 character
@@ -396,7 +396,7 @@ mapping key.
 | Host | `com.apple.developer.system-extension.install = true` |
 | Host and extension | `com.apple.developer.networking.networkextension = ["content-filter-provider-systemextension"]` |
 | Both, when signing | Matching `com.apple.application-identifier` and `com.apple.developer.team-identifier` from the profiles |
-| Both, when signing | `com.apple.security.application-groups` with a group prefixed by the Team ID, for `NEMachServiceName` (below) |
+| Extension, when signing | `com.apple.security.application-groups` with a group prefixed by the Team ID, for `NEMachServiceName` (below) |
 
 The templates in `macos/Resources/*.entitlements` contain only the capability
 keys; they are not provisioned identities. For release, prepare copies with the
@@ -416,8 +416,9 @@ complete this Developer ID deployment path. See Apple's
 and [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
 A system network extension also needs `NEMachServiceName` in the
-`NetworkExtension` dictionary of its Info.plist, named under an app group both
-bundles are entitled to, for example `<TeamID>.com.valentorassa.blackice.filter`.
+`NetworkExtension` dictionary of its Info.plist, named under an app group the
+extension is entitled to, for example `<TeamID>.com.valentorassa.blackice.filter`.
+The host never connects to that service, so it does not get the group.
 Apple DTS describes the key as a hard requirement on the
 [developer forums](https://developer.apple.com/forums/thread/659052).
 `Filter-Info.plist` and the entitlement templates do not carry it, because the
@@ -425,8 +426,8 @@ value depends on the real Team ID. `macos/signing-copies.sh TEAM_ID DIR` writes
 copies of `Filter-Info.plist`, `Filter.entitlements` and `Host.entitlements` to a
 fresh directory, with `NEMachServiceName` set to
 `<TeamID>.com.valentorassa.blackice.filter` and the app group
-`<TeamID>.com.valentorassa.blackice` in both entitlements. It never signs or
-edits the templates. Put that `Filter-Info.plist` in the extension bundle and
+`<TeamID>.com.valentorassa.blackice` in the extension's entitlements; the host's
+copy is the template unchanged. It never signs or edits the templates. Put that `Filter-Info.plist` in the extension bundle and
 sign with those entitlements, after adding the application and team identifiers
 from the profiles. An extension without the key is expected not to start;
 whether it starts with it is unverified until a signed run.

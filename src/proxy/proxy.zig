@@ -46,6 +46,12 @@
 //!   (Both sides are reset, not closed: bytes still queued toward the client or the upstream are dropped, so
 //!   nothing moves through the proxy after the grant ends.)
 //!   grant_watchdog_failed the task that enforces a grant's lifetime could not start (503)
+//! App scopes (`Config.live`) decide with the policy binding in force when the request arrives, not the one in
+//! force when the connection was accepted. After the dial, before any byte is forwarded, they decide again with
+//! the binding in force then; a refusal there has detail rechecked_after_dial. They also use:
+//!   policy_change_in_progress  a policy change was being published (503)
+//!   retired_app_after_restart  the app was removed before the service restarted (403)
+//!   policy_watchdog_failed     the task that cuts connections a narrowed policy refuses could not start (503)
 //! A tunnel the client closes before sending a byte keeps its allow verdict and reason, with detail
 //! client_closed (or canceled when the scope ended first) and wait_ms, the time the client waited for the 200.
 //! Nothing reached the upstream. A client that gives up while the proxy is still dialing shows up this way.
@@ -114,7 +120,8 @@ pub const Config = struct {
     resolver: ?Resolver = null,
     /// Grants consulted when the policy refuses a name. Owned by the caller.
     grants: ?*Grants = null,
-    /// App scopes capture one immutable policy per connection; task scopes leave this null.
+    /// App scopes: the live policy binding, read when each request is decided and again after its dial. Task
+    /// scopes leave this null.
     live: ?live_policy.Source = null,
 };
 
@@ -276,6 +283,7 @@ const Connection = struct {
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
     header: HeaderState,
+    /// App scopes: the binding read at accept, replaced by the one each decision used. It labels receipts.
     view: ?live_policy.Binding,
 
     fn init(c: *Connection, p: *Proxy, stream: net.Stream) void {
@@ -360,6 +368,7 @@ const Connection = struct {
 
         const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
         defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
         const wait_ms = t0.untilNow(c.io, .awake).toMilliseconds();
 
         // A grant's expiry or revocation closes the tunnel, not only new connections. No watchdog, no tunnel.
@@ -412,6 +421,13 @@ const Connection = struct {
             shutdownProtected(c.io, c.client, .both);
             return;
         }
+        // The client may have sent its first bytes long after the dial: decide once more before they go out.
+        if (!c.recheck(&d)) {
+            c.writeReceipt(&d);
+            shutdownProtected(c.io, upstream, .both);
+            shutdownProtected(c.io, c.client, .both);
+            return;
+        }
         c.writeReceipt(&d);
 
         var down_buf: [16 * 1024]u8 = undefined;
@@ -450,6 +466,7 @@ const Connection = struct {
         if (!d.allowed) return c.refuse(&d);
         const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
         defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
         d.detail = "transparent_sni";
         var watchdog = c.armWatchdog(&d, upstream) catch return c.refuse(&d);
         defer if (watchdog) |*f| f.cancel(c.io) catch {};
@@ -487,6 +504,7 @@ const Connection = struct {
 
         const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
         defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
         var watchdog = c.armWatchdog(&d, upstream) catch return c.refuse(&d);
         defer if (watchdog) |*f| f.cancel(c.io) catch {};
         c.writeReceipt(&d);
@@ -545,8 +563,53 @@ const Connection = struct {
         return c.canceled();
     }
 
+    /// App scopes only: takes the policy binding in force now into `c.view`, so the decision and its receipt use
+    /// the generation in force when the request arrived. False, with `d` filled as a refusal, while a policy
+    /// change is being published or when the app was removed before the service restarted.
+    fn bindNow(c: *Connection, d: *Decision) bool {
+        const source = c.p.config.live orelse return true;
+        if (source.capture()) |view| {
+            c.view = view;
+            return true;
+        }
+        const now = source.current();
+        if (now) |view| c.view = view;
+        d.allowed = false;
+        d.rule = null;
+        if (now != null and !now.?.serve) {
+            d.policy_denied = true;
+            d.reason = "retired_app_after_restart";
+        } else {
+            d.policy_denied = false;
+            d.reason = "policy_change_in_progress";
+            d.status = "503 Service Unavailable";
+        }
+        return false;
+    }
+
+    /// App scopes only: decides again, after the dial and before any byte is forwarded, with the binding in force
+    /// now. A policy change published while the proxy resolved and dialed is applied here, so the upstream
+    /// never gets a byte the new policy refuses; from here on the watchdog covers the open connection.
+    /// False, with `d` filled as a refusal.
+    fn recheck(c: *Connection, d: *Decision) bool {
+        if (c.p.config.live == null) return true;
+        if (!c.bindNow(d)) {
+            d.detail = "rechecked_after_dial";
+            return false;
+        }
+        const ip = if (d.ip_len > 0) policy.parseIpLiteral(d.ip_buf[0..d.ip_len]) else null;
+        const v = live_policy.verdict(c.view.?, d.host, d.port, ip);
+        d.setVerdict(v);
+        if (!v.allowed) d.detail = "rechecked_after_dial";
+        return v.allowed;
+    }
+
     /// Fills `d` with the policy decision and returns the addresses that may be dialed.
     fn decide(c: *Connection, d: *Decision, host_raw: []const u8, port: u16, buf: *[max_dial]net.IpAddress) Io.Cancelable![]net.IpAddress {
+        if (!c.bindNow(d)) {
+            d.host = policy.normalizeHost(&d.host_buf, host_raw) catch host_raw;
+            return buf[0..0];
+        }
         const pol = if (c.view) |view| view.policy else c.p.policy;
         const pv = pol.checkPort(port);
         if (!pv.allowed) {

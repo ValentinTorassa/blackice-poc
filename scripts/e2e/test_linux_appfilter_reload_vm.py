@@ -62,13 +62,26 @@ class ReceiptChecks(unittest.TestCase):
         result = vm.validate_web(records, attempts, 99, 1, configs, '/launcher')
         self.assertEqual(result['attempts'], 8)
         self.assertEqual(result['http_responses'], 5)
-        for mutation in ('missing', 'duplicate', 'wrong_hash', 'wrong_allow'):
+        for mutation in ('missing', 'duplicate', 'wrong_hash', 'wrong_allow', 'allowed_while_paused'):
             rows = copy.deepcopy(records)
             if mutation == 'missing': rows.pop()
             if mutation == 'duplicate': rows.append(rows[0])
             if mutation == 'wrong_hash': rows[0]['policy'] = '0' * 64
             if mutation == 'wrong_allow': rows[-1]['verdict'] = 'allow'
+            if mutation == 'allowed_while_paused': rows[0]['reason'] = 'policy_change_in_progress'
             with self.assertRaises(RuntimeError): vm.validate_web(rows, attempts, 99, 1, configs, '/launcher')
+
+    def test_https_request_during_a_change_is_a_named_refusal(self):
+        policy = {'version': 'blackice.policy/v0', 'network': {'mode': 'allowlist', 'allow': ['example.com', 'github.com']}}
+        digest = hashlib.sha256(json.dumps(policy, separators=(',', ':')).encode()).hexdigest()
+        configs = [{'applications': [{'executable': '/launcher', 'policy': policy}]}] * 4
+        records = [{'event': 'connect', 'app_id': 1, 'gen': gen, 'policy': digest, 'host': host, 'verdict': 'allow',
+                    'reason': 'allowed_domain'} for gen in range(1, 5) for host in ('example.com', 'github.com')]
+        attempts = [{'http_status': 200} for _ in records]
+        records.append({'event': 'connect', 'app_id': 1, 'gen': 2, 'policy': digest, 'host': 'example.com',
+                        'verdict': 'deny', 'reason': 'policy_change_in_progress'})
+        attempts.append({'http_status': None})
+        self.assertEqual(vm.validate_web(records, attempts, 99, 1, configs, '/launcher')['proxy_decisions'], 9)
 
 
 if __name__ == '__main__':

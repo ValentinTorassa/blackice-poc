@@ -25,12 +25,22 @@ pub const Source = struct {
 };
 
 pub fn permits(b: Binding, host: []const u8, port: u16, ip: ?std.Io.net.IpAddress) bool {
-    if (!b.serve) return false;
-    if (!b.policy.checkPort(port).allowed) return false;
-    if (policy.parseIpLiteral(host)) |literal| return b.policy.checkLiteral(literal).allowed;
-    if (!b.policy.checkHost(host).allowed) return false;
-    if (ip) |resolved| if (!b.policy.checkResolved(resolved).allowed) return false;
-    return true;
+    return b.serve and verdict(b, host, port, ip).allowed;
+}
+
+/// The policy's verdict for a connection to `host`:`port` that uses address `ip`, with the proxy's checks in its
+/// order: the port, then the IP literal or the name, then the selected address. `serve` is not checked here.
+pub fn verdict(b: Binding, host: []const u8, port: u16, ip: ?std.Io.net.IpAddress) policy.Verdict {
+    const pv = b.policy.checkPort(port);
+    if (!pv.allowed) return pv;
+    if (policy.parseIpLiteral(host)) |literal| return b.policy.checkLiteral(literal);
+    const hv = b.policy.checkHost(host);
+    if (!hv.allowed) return hv;
+    if (ip) |resolved| {
+        const rv = b.policy.checkResolved(resolved);
+        if (!rv.allowed) return rv;
+    }
+    return hv;
 }
 
 test "appfilter live view narrowing checks host port and the already selected address" {

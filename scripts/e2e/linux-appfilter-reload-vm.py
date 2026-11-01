@@ -154,6 +154,10 @@ def validate_web(records, attempts, pid, app_id, configs, launcher):
             require(row.get('verdict') == 'deny' and row.get('reason') == 'policy_change_in_progress', 'unexplained nameless HTTPS decision')
             continue
         require(host in ('example.com', 'github.com'), 'unexpected HTTPS host')
+        # A ClientHello that arrives while a change is published is refused by name, whatever either policy says.
+        if row.get('reason') == 'policy_change_in_progress':
+            require(row.get('verdict') == 'deny', 'policy_change_in_progress must refuse')
+            continue
         network = policies[gen - 1]['network']
         require(network['mode'] == 'allowlist', 'web-loop fixtures must use exact-name allowlists')
         allowed = host in network['allow']

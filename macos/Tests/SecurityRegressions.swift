@@ -89,6 +89,20 @@ func securityRegressions() throws {
     let (_, next) = try configuration(gen: 2)
     try ConfigurationUpdate.validate(next, replacing: config)
     rejects("host rejects rollback") { try ConfigurationUpdate.validate(config, replacing: next) }
+    let filterID = AppFilterConstants.extensionBundleID
+    func replaces(_ installed: String, with candidate: String, id: String = AppFilterConstants.extensionBundleID) -> Bool {
+        ExtensionReplacement.allowed(existingID: filterID, existingVersion: installed, candidateID: id, candidateVersion: candidate)
+    }
+    for (installed, candidate) in [("1", "2"), ("1", "1"), ("1", "1.0"), ("1.0", "1"), ("1.9", "1.10"), ("2.0.1", "2.1")] {
+        expect(replaces(installed, with: candidate), "activation replaces \(installed) with \(candidate)")
+    }
+    for (installed, candidate) in [("2", "1"), ("1.10", "1.9"), ("1.0.1", "1"), ("1", "0")] {
+        expect(!replaces(installed, with: candidate), "activation refuses downgrade \(installed) to \(candidate)")
+    }
+    for malformed in ["", "a", "1.a", "-1", "1..2", "1.2.3.4", " 1", "1 ", "+1", "1234567890"] {
+        expect(!replaces("1", with: malformed) && !replaces(malformed, with: "1"), "unparseable bundle version refuses replacement: \(malformed)")
+    }
+    expect(!replaces("1", with: "2", id: "com.example.other.filter"), "activation never replaces with another bundle ID")
 
     let (_, domains) = try configuration(policy: #"{"mode":"allowlist","allow":["*.example.com"]}"#, hostnameMode: "os-metadata")
     let domain = AppEvaluator.evaluate(flow(hostname: "API.Example.com."), configuration: domains)

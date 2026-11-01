@@ -134,3 +134,7 @@ jobs:
 
       - name: Unit tests
         run: macos/test.sh "$RUNNER_TEMP/macos-tests"
+
+      # Synthetic Team ID, as in the docs. Checks the generated plists; nothing is signed.
+      - name: Signing copies
+        run: macos/signing-copies.sh ABCDE12345 "$RUNNER_TEMP/signing-copies"

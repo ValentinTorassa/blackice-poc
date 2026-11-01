@@ -420,11 +420,16 @@ A system network extension also needs `NEMachServiceName` in the
 bundles are entitled to, for example `<TeamID>.com.valentorassa.blackice.filter`.
 Apple DTS describes the key as a hard requirement on the
 [developer forums](https://developer.apple.com/forums/thread/659052).
-`Filter-Info.plist` and the entitlement templates do not carry it yet, because
-the value depends on the real Team ID: add the key and the
-`com.apple.security.application-groups` entitlement when preparing the signed
-copies. An extension without them is expected not to start; that is unverified
-until a signed run.
+`Filter-Info.plist` and the entitlement templates do not carry it, because the
+value depends on the real Team ID. `macos/signing-copies.sh TEAM_ID DIR` writes
+copies of `Filter-Info.plist`, `Filter.entitlements` and `Host.entitlements` to a
+fresh directory, with `NEMachServiceName` set to
+`<TeamID>.com.valentorassa.blackice.filter` and the app group
+`<TeamID>.com.valentorassa.blackice` in both entitlements. It never signs or
+edits the templates. Put that `Filter-Info.plist` in the extension bundle and
+sign with those entitlements, after adding the application and team identifiers
+from the profiles. An extension without the key is expected not to start;
+whether it starts with it is unverified until a signed run.
 
 There is no Endpoint Security entitlement in this implementation, and the
 provider keeps no files in an app-group container. Configuration travels through
@@ -446,7 +451,12 @@ These are future deployment instructions, not steps performed by the build.
 macOS must approve the system extension and the network filter; inspect the
 normal System Settings prompts, or the corresponding managed deployment
 authorization. A restart-required response is not treated as completed
-activation. Keep SIP enabled and normal security settings. Never use developer
+activation. When an older build of the extension is installed, `activate`
+replaces it only with the same bundle ID at the same or a higher
+`CFBundleVersion`; a lower or unparseable version is refused
+(`replacement_refused`), so bump `CFBundleVersion` in `Filter-Info.plist` for
+every release. A deliberate rollback is `disable`, `deactivate`, then
+`activate`. Keep SIP enabled and normal security settings. Never use developer
 mode or disabled SIP as evidence of a supported installation.
 
 `activate`, `enable`, `disable`, `remove-config` and `deactivate` refuse an
@@ -510,9 +520,11 @@ confirmed only linker ad hoc signing with no Team ID. No activation or live
 enforcement test was performed.
 
 Since then, CI (the `macos app filter` job in `.github/workflows/ci.yml`) builds
-both bundles unsigned with `macos/build.sh` and runs `macos/test.sh` on GitHub's
+both bundles unsigned with `macos/build.sh`, runs `macos/test.sh` and checks
+the plists `macos/signing-copies.sh` writes for a synthetic Team ID, on GitHub's
 `macos-latest` runner for every pull request and push to `main`. That covers
-compilation and the unit tests only, on the runner's Xcode, not a signed run.
+compilation, the unit tests and the plist contents only, on the runner's Xcode,
+not a signed run.
 
 Tests cover exact/wildcard matching, private and mapped addresses, IPv6 CIDRs,
 ports, strict configuration, identity binding isolation, inbound denial,

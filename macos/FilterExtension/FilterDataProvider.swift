@@ -93,11 +93,9 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func reloadConfiguration() {
         do {
-            let previous = snapshots.read()?.generation
-            try snapshots.install(readConfiguration())
-            if previous != snapshots.read()?.generation {
-                discardPending(reason: "policy_changed") { _ in true }
-            }
+            // A notification that leaves the snapshot as it was changes nothing and logs nothing.
+            guard try snapshots.install(readConfiguration()) else { return }
+            discardPending(reason: "policy_changed") { _ in true }
             controlEvent("policy_activated", reason: "snapshot_installed")
         } catch {
             // Invalid or stale updates cannot replace a working snapshot.
@@ -192,7 +190,7 @@ final class FilterDataProvider: NEFilterDataProvider {
     private func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
         AppDecision(scope: result.scope, policy: result.policy, generation: result.generation,
                     decision: reason.map { Decision(allowed: false, reason: $0) } ?? result.decision,
-                    echPresent: echPresent)
+                    echPresent: echPresent, hostnameMode: result.hostnameMode)
     }
 
     private func startMaintenance() {
@@ -230,7 +228,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func emitFlow(_ facts: FlowFacts, result: AppDecision) {
         guard telemetry.shouldLog(result) else { return }
-        emit(Receipt.flow(facts, result: result, hostnameMode: snapshots.read()?.hostnameMode), privateFields: true)
+        emit(Receipt.flow(facts, result: result, hostnameMode: result.hostnameMode), privateFields: true)
     }
 
     private func controlEvent(_ event: String, reason: String, detail: String = "") {

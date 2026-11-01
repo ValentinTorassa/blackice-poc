@@ -519,6 +519,11 @@ plists passed `plutil`; 351 test assertions passed. The host's `make-config` and
 confirmed only linker ad hoc signing with no Team ID. No activation or live
 enforcement test was performed.
 
+CI compiles both bundles and runs these tests on every pull request on GitHub's
+`macos-latest` runner (`macos app filter` job), with whatever Command Line Tools
+that image ships. That checks compilation and unit behaviour only; the runner
+never signs, installs or activates the extension.
+
 Tests cover exact/wildcard matching, private and mapped addresses, IPv6 CIDRs,
 ports, strict configuration, identity binding isolation, inbound denial,
 ad hoc unmatched allow/deny, unresolved/invalid-signed denial, delegated-source
@@ -528,7 +533,10 @@ and rejects missing/invalid audit tokens. Fake authenticators test denial and
 approval for every mutating command without prompting the user or changing
 preferences. Prompt tests check policy digests, identities, generation/unmatched
 changes, parent-label cleaning and identical terminal/authentication text.
-TLS tests port the proxy's ClientHello vectors and add truncated
+Host precondition tests check that each refused request fails before the prompt,
+and that owner-authentication receipts carry the shown digest and generation.
+Size, nesting and generation refusals are checked by their reason, with valid
+input on the accepted side of each limit. TLS tests port the proxy's ClientHello vectors and add truncated
 prefixes, callback slicing, exact-SNI mismatch, plaintext HTTP, UDP, ECH,
 duplicate extensions, invalid names and buffer limits. These tests do not replace
 signed-app runtime identity, real LocalAuthentication UI or Network Extension

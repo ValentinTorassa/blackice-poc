@@ -110,3 +110,28 @@ jobs:
         env:
           CROSS_TARGET: ${{ matrix.cross_target }}
         run: zig build -Dtarget="$CROSS_TARGET" --summary all
+
+  # The Swift app filter under macos/ is outside the Zig build. Compile it unsigned with the runner's Command Line
+  # Tools and run its standalone tests. Nothing is signed, installed or activated (docs/macos-app-filter.md).
+  macos-app-filter:
+    name: macos app filter (unsigned build and unit tests)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the toolchain
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcrun swiftc --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Build
+        run: ./macos/build.sh "$RUNNER_TEMP/macos-app-filter"
+
+      - name: Test
+        run: ./macos/test.sh "$RUNNER_TEMP/macos-app-filter-tests"

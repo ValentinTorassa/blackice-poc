@@ -16,8 +16,8 @@ A task scope covers a command that blackice starts. An app scope covers an app t
 and was started some other way: a browser, an editor, a chat client. It gives that app a policy of its own,
 checked from the app's first connection, so the owner can say "this app may reach only these places" without
 wrapping it. blackice needs both kinds before its first usable release, on macOS and on Linux. App scopes are
-not part of v0 and do not run yet: on macOS the filter is built but not signed, and on Linux the way to
-recognise an app is designed and its first build is in review.
+not part of v0 and do not run yet: on macOS the filter is built but not signed, and on Linux the filter is
+built as experimental code and has run only in a virtual machine.
 
 ## Requirements
 
@@ -74,7 +74,7 @@ App scopes are planned, not designed in detail. Each platform has one candidate 
 | macOS: ClientHellos with ECH: allow on the exact outer server name, with an `ech_present` note (013d718) | appfilter | done | |
 | macOS: sign the extension and run it on a Mac | valen | blocked | No Apple Developer Program membership (signing) and no full Xcode on the Mac. Until then its state stays "built, unsigned" and never "verified" |
 | Linux: qualify desktop app groups (first-packet coverage, unknown groups, user-created units, migration, terminal children) | codex | todo | |
-| Linux: choose how an app is recognised and matched, and build it; a design is reviewed; its first build had a security review, and the fixes from it are in review; kernel tests in a virtual machine and a security clearance come before any install | codex | doing | |
+| Linux: choose how an app is recognised and matched, and build it; a design is reviewed; the first build and live policy reload had security reviews, and their fixes are merged (#39); a rerun in a virtual machine on the merged code and a stepwise first install come before any real machine | codex | doing | |
 | Show both app-scope cells as not available in status and docs | marketing | done | |
 
 ## Evidence

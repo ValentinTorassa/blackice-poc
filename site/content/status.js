@@ -21,7 +21,9 @@ export const MATRIX = [
     os: 'Linux',
     apps: {
       base: 'pending',
-      how: 'Per-app control across the whole machine, which needs a reliable way to tell which app opened each connection. A first build is in review, not cleared, and runs only in a virtual machine so far.',
+      code: 'src/linux_appfilter.zig',
+      builtAs: 'vmonly',
+      how: 'Per-app control across the whole machine, which needs a reliable way to tell which app opened each connection. Built as experimental code. It has run only in a virtual machine and is not ready to install.',
     },
     tasks: {
       base: 'designed',
@@ -68,5 +70,6 @@ export const STATE_LABEL = {
   designed: 'Designed',
   built: 'Built, not tested',
   unsigned: 'Built, unsigned',
+  vmonly: 'Built, VM only',
   verified: 'Tested',
 };

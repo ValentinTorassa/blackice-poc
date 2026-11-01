@@ -104,11 +104,8 @@ What the workflow assumes. These are repository settings, and changing them is t
 - **Immutable releases are on** before the first release is published, so assets cannot be swapped afterwards.
 - A draft is visible only to people with write access. Someone reads it before publishing it.
 
-Known gaps before the first release:
+Known gap:
 
-- The helper and `scripts/linux-build-helper.sh` reach `main` with the Linux backend pull request, and the
-  versioned release files with the 0.1.0 release change. Until both are on `main`, the build job fails, so no
-  release can be made.
 - `linux-setup.sh` looks for the helper in `../zig-out/bin` relative to itself. Shipping the setup scripts, or
   a Homebrew or tarball install, needs a helper-path argument first. That is a change to privileged setup code
   and needs its own review and a new pinned hash.

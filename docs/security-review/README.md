@@ -23,7 +23,8 @@ before anyone runs it with sudo.
 ## CI
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on `ubuntu-latest` (x86_64) and
-`macos-latest` (arm64): `zig fmt --check` (Linux only), `zig build`, `zig build test`, and a cross-build for the
+`macos-latest` (arm64): `zig fmt --check` (Linux only), `zig build`, `zig build test`, the Linux app filter's
+build and unit tests (`zig build linux-appfilter linux-appfilter-test`, Linux only), and a cross-build for the
 other OS.
 
 On Linux, the tests run with `kernel.apparmor_restrict_unprivileged_userns=0`. The Ubuntu runner image sets it to

@@ -1,0 +1,8 @@
+{
+  "version": "blackice.policy/v0",
+  "network": {
+    "mode": "allowlist",
+    "subnets": { "allow": ["198.51.100.0/24", "2001:db8:1::/48"] },
+    "ports": [443]
+  }
+}

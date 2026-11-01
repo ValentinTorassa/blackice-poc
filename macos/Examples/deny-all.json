@@ -1,0 +1,4 @@
+{
+  "version": "blackice.policy/v0",
+  "network": { "mode": "deny-all" }
+}

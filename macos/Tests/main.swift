@@ -205,6 +205,18 @@ do {
     expect(try AppConfiguration(data: JSONSerialization.data(withJSONObject: modified)).apps[0].policy.sha256 == edited["policy_sha256"] as? String, "matching digest preserves changed original bytes")
     object["apps"] = bindings + bindings
     rejects("duplicate binding rejected") { _ = try AppConfiguration(data: JSONSerialization.data(withJSONObject: object)) }
+    for scope in ["app-unbound", "app-unavailable", "app-provider", "app-control"] {
+        var named = bindings[0]
+        named["scope"] = scope
+        modified = object
+        modified["apps"] = [named]
+        rejects("binding cannot take the receipt scope \(scope)", reason: "reserved_scope") {
+            _ = try AppConfiguration(data: JSONSerialization.data(withJSONObject: modified))
+        }
+    }
+    expect(AppFilterConstants.reservedScopes.contains(AppEvaluator.evaluate(flow(), configuration: nil).scope) &&
+           AppFilterConstants.reservedScopes.contains(AppEvaluator.evaluate(flow(app: SigningIdentity(signingID: "com.other", teamID: "OTHER12345")), configuration: config).scope),
+           "evaluator scopes for unbound and unavailable are reserved")
     expect(!validTeamID("A\" OR true") && !validSigningID("com.a\" or true"), "requirement injection rejected")
     let snapshots = SnapshotStore()
     try snapshots.install(config)

@@ -235,7 +235,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func controlEvent(_ event: String, reason: String, detail: String = "") {
         let config = snapshots.read()
-        var receipt = Receipt(scope: "app-provider", policy: config?.id ?? "unavailable",
+        var receipt = Receipt(scope: AppFilterConstants.providerScope, policy: config?.id ?? "unavailable",
                               generation: config?.generation ?? 0, point: "control", event: event)
         receipt.reason = reason
         receipt.detail = "backend=network_extension;scope_kind=app;durable_receipts=unavailable" + detail

@@ -70,7 +70,7 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
 }
 
 func auditControl(_ action: HostAction, parent: pid_t, approved: Bool) {
-    var receipt = Receipt(scope: "app-control", policy: "unavailable", generation: 0,
+    var receipt = Receipt(scope: AppFilterConstants.controlScope, policy: "unavailable", generation: 0,
                           point: "control", event: "owner_authentication")
     receipt.verdict = approved ? "allow" : "deny"
     receipt.reason = approved ? "user_presence_confirmed" : "user_presence_refused"

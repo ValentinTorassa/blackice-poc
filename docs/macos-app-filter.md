@@ -176,8 +176,11 @@ The strict wrapper schema (JSON Schema 2020-12) is:
         "required": ["scope", "team_id", "signing_id", "policy_json", "policy_sha256"],
         "properties": {
           "scope": {
-            "type": "string", "minLength": 4, "maxLength": 64,
-            "pattern": "^app-", "not": { "pattern": "[^A-Za-z0-9_.-]" }
+            "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^app-",
+            "not": { "anyOf": [
+              { "pattern": "[^A-Za-z0-9_.-]" },
+              { "enum": ["app-unbound", "app-unavailable", "app-provider", "app-control"] }
+            ] }
           },
           "team_id": {
             "type": "string", "minLength": 10, "maxLength": 10,
@@ -219,6 +222,9 @@ The parser also enforces constraints that this wrapper schema cannot express:
   migration or relaxed fallback. `make-config` emits only the approved version.
 
 Scope names start with `app-`. Duplicate scopes or identity pairs are rejected.
+`app-unbound`, `app-unavailable`, `app-provider` and `app-control` are reserved
+(`reserved_scope`): the provider and host write them in their own receipts, and a
+binding with one of those names would be indistinguishable from them.
 The provider validates the full candidate before installing a snapshot under a
 lock. During a provider lifetime, a lower generation, or a different snapshot
 at the same generation, is rejected. Invalid updates retain the last valid

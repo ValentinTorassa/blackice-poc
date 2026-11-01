@@ -5,6 +5,11 @@ enum AppFilterConstants {
     static let extensionBundleID = "com.valentorassa.blackice.filter"
     static let configurationKey = "blackice.appscope.configuration"
     static let logSubsystem = "com.valentorassa.blackice.filter"
+    /// Scopes that the provider and host write in their own receipts.
+    static let unboundScope = "app-unbound", unavailableScope = "app-unavailable"
+    static let providerScope = "app-provider", controlScope = "app-control"
+    /// A binding named like one of these would be indistinguishable from it in receipts.
+    static let reservedScopes: Set<String> = [unboundScope, unavailableScope, providerScope, controlScope]
 }
 
 struct AppBindingDocument: Codable {
@@ -120,6 +125,9 @@ struct AppConfiguration {
                   identities.insert(app.teamID + "/" + app.signingID).inserted else {
                 throw ConfigurationError.invalid("invalid_or_duplicate_app_binding")
             }
+            guard !AppFilterConstants.reservedScopes.contains(app.scope) else {
+                throw ConfigurationError.invalid("reserved_scope")
+            }
             let policy = try NetworkPolicy(data: Data(app.policyJSON.utf8))
             guard app.policySHA256 == policy.sha256 else {
                 throw ConfigurationError.invalid("policy_sha256_mismatch")
@@ -185,11 +193,12 @@ struct AppDecision {
 enum AppEvaluator {
     static func evaluate(_ flow: FlowFacts, configuration: AppConfiguration?) -> AppDecision {
         guard let config = configuration else {
-            return AppDecision(scope: "app-unavailable", policy: "unavailable", generation: 0,
+            return AppDecision(scope: AppFilterConstants.unavailableScope, policy: "unavailable", generation: 0,
                                decision: Decision(allowed: false, reason: "configuration_unavailable"))
         }
         func unbound(_ decision: Decision) -> AppDecision {
-            AppDecision(scope: "app-unbound", policy: config.id, generation: config.generation, decision: decision)
+            AppDecision(scope: AppFilterConstants.unboundScope, policy: config.id, generation: config.generation,
+                        decision: decision)
         }
         guard flow.direction != .unknown else {
             return unbound(Decision(allowed: false, reason: "unknown_direction"))

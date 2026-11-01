@@ -97,8 +97,14 @@ final class ExtensionRequestDelegate: NSObject, OSSystemExtensionRequestDelegate
     }
     func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
                  withExtension candidate: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
-        existing.bundleIdentifier == AppFilterConstants.extensionBundleID &&
-            candidate.bundleIdentifier == AppFilterConstants.extensionBundleID ? .replace : .cancel
+        guard ExtensionReplacement.allowed(existingID: existing.bundleIdentifier, existingVersion: existing.bundleVersion,
+                                           candidateID: candidate.bundleIdentifier, candidateVersion: candidate.bundleVersion) else {
+            output(["state": "replacement_refused", "enforcement_verified": false,
+                    "installed_bundle_version": existing.bundleVersion, "candidate_bundle_version": candidate.bundleVersion,
+                    "next": "to roll back on purpose: disable, deactivate, then activate"])
+            return .cancel
+        }
+        return .replace
     }
     func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         output(["state": result == .completed ? "extension_request_completed" : "restart_required",

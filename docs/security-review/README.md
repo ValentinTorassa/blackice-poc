@@ -24,7 +24,9 @@ before anyone runs it with sudo.
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on `ubuntu-latest` (x86_64) and
 `macos-latest` (arm64): `zig fmt --check` (Linux only), `zig build`, `zig build test`, and a cross-build for the
-other OS.
+other OS. A separate `macos-latest` job compiles the Swift app filter with `macos/build.sh`, runs
+`macos/test.sh` and checks the plists `macos/signing-copies.sh` writes for a synthetic Team ID. It builds unsigned
+and never signs, installs or activates the extension.
 
 On Linux, the tests run with `kernel.apparmor_restrict_unprivileged_userns=0`. The Ubuntu runner image sets it to
 `1`, which leaves a process with no capabilities in a user namespace it creates without privilege, so the

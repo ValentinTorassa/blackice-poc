@@ -110,3 +110,31 @@ jobs:
         env:
           CROSS_TARGET: ${{ matrix.cross_target }}
         run: zig build -Dtarget="$CROSS_TARGET" --summary all
+
+  # The Swift app filter under macos/ needs the macOS SDK, so only a macOS runner can compile it.
+  # Unsigned build and unit tests only: nothing is signed, installed or activated.
+  macos-app-filter:
+    name: macos app filter (Swift)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcrun swiftc --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Build the host and extension, unsigned
+        run: macos/build.sh "$RUNNER_TEMP/macos-build"
+
+      - name: Unit tests
+        run: macos/test.sh "$RUNNER_TEMP/macos-tests"
+
+      # Synthetic Team ID, as in the docs. Checks the generated plists; nothing is signed.
+      - name: Signing copies
+        run: macos/signing-copies.sh ABCDE12345 "$RUNNER_TEMP/signing-copies"

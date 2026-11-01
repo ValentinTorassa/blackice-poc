@@ -481,8 +481,8 @@ generation that is not above the saved one (`update_requires_higher_generation`)
 or over an unreadable saved configuration (`invalid_saved_configuration`),
 `disable` or `remove-config` with nothing saved (`no_owned_configuration`), and
 `remove-config` or `deactivate` while the filter is enabled. The same checks run
-again on the preferences reloaded after authentication. A confined app cannot change the filter
-through this helper without user authentication. This does not prevent a user
+again on the preferences reloaded after authentication. A confined app cannot
+change the filter through this helper without user authentication. This does not prevent a user
 from approving a malicious request or using macOS's own administration controls.
 macOS separately enforces entitlement/profile and system-consent requirements.
 
@@ -533,12 +533,14 @@ and rejects missing/invalid audit tokens. Fake authenticators test denial and
 approval for every mutating command without prompting the user or changing
 preferences. Prompt tests check policy digests, identities, generation/unmatched
 changes, parent-label cleaning and identical terminal/authentication text.
-Host precondition tests check that each refused request fails before the prompt,
-and that owner-authentication receipts carry the shown digest and generation.
-Size, nesting and generation refusals are checked by their reason, with valid
-input on the accepted side of each limit. TLS tests port the proxy's ClientHello vectors and add truncated
-prefixes, callback slicing, exact-SNI mismatch, plaintext HTTP, UDP, ECH,
-duplicate extensions, invalid names and buffer limits. These tests do not replace
+Precondition tests check the refusal the host applies before the prompt for
+each action and saved state (the host CLI itself is not part of the test
+executable), and that owner-authentication receipts carry the shown digest and
+generation. Size, nesting and generation refusals are checked by their reason,
+with valid input on the accepted side of each limit. TLS tests port the proxy's
+ClientHello vectors and add truncated prefixes, callback slicing, exact-SNI
+mismatch, plaintext HTTP, UDP, ECH, duplicate extensions, invalid names and
+buffer limits. These tests do not replace
 signed-app runtime identity, real LocalAuthentication UI or Network Extension
 callback/timeout testing. No authentication prompt was displayed during testing.
 

@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+[[ $EUID == 0 ]] || { echo 'Run through the reviewed root bootstrap unit.' >&2; exit 1; }
+PS4='+ blackice bpffs: '
+set -x
+/usr/bin/install -d -o root -g root -m 0755 /run/blackice-appfilter
+/usr/bin/install -d -o root -g root -m 0700 /run/blackice-appfilter/bpf
+if /usr/bin/mountpoint -q /run/blackice-appfilter/bpf; then
+    [[ $(/usr/bin/findmnt -n -o FSTYPE --mountpoint /run/blackice-appfilter/bpf) == bpf ]]
+else
+    /usr/bin/mount -t bpf -o mode=0700,nosuid,nodev,noexec blackice-appfilter /run/blackice-appfilter/bpf
+fi
+/usr/bin/chown blackice-appfilter:blackice-appfilter /run/blackice-appfilter/bpf
+/usr/bin/chmod 0700 /run/blackice-appfilter/bpf

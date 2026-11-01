@@ -1,0 +1,26 @@
+{
+  "version": "blackice.apps/v0",
+  "applications": [
+    {
+      "executable": "/usr/bin/setsid",
+      "policy": {
+        "version": "blackice.policy/v0",
+        "network": { "mode": "allowlist", "allow": ["example.com"] }
+      }
+    },
+    {
+      "executable": "/usr/bin/wget",
+      "policy": {
+        "version": "blackice.policy/v0",
+        "network": { "mode": "allowlist", "allow": ["example.org"] }
+      }
+    },
+    {
+      "executable": "/usr/bin/curl",
+      "policy": {
+        "version": "blackice.policy/v0",
+        "network": { "mode": "allowlist", "allow": ["example.com"] }
+      }
+    }
+  ]
+}

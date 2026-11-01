@@ -46,6 +46,12 @@
 //!   (Both sides are reset, not closed: bytes still queued toward the client or the upstream are dropped, so
 //!   nothing moves through the proxy after the grant ends.)
 //!   grant_watchdog_failed the task that enforces a grant's lifetime could not start (503)
+//! App scopes (`Config.live`) decide with the policy binding in force when the request arrives, not the one in
+//! force when the connection was accepted. After the dial, before any byte is forwarded, they decide again with
+//! the binding in force then; a refusal there has detail rechecked_after_dial. They also use:
+//!   policy_change_in_progress  a policy change was being published (503)
+//!   retired_app_after_restart  the app was removed before the service restarted (403)
+//!   policy_watchdog_failed     the task that cuts connections a narrowed policy refuses could not start (503)
 //! A tunnel the client closes before sending a byte keeps its allow verdict and reason, with detail
 //! client_closed (or canceled when the scope ended first) and wait_ms, the time the client waited for the 200.
 //! Nothing reached the upstream. A client that gives up while the proxy is still dialing shows up this way.
@@ -65,11 +71,43 @@ const policy = @import("../core/policy.zig");
 const receipt = @import("../core/receipt.zig");
 const grants_mod = @import("grants.zig");
 pub const Grants = grants_mod.Grants;
+pub const live_policy = @import("live_policy.zig");
 const builtin = @import("builtin");
 
+pub const Mode = enum { explicit, transparent_http, transparent_tls };
+
+pub const ConnectionBudget = struct {
+    active: std.atomic.Value(u32) = .init(0),
+    limit: u32,
+    pub fn acquire(b: *ConnectionBudget) bool {
+        if (b.active.fetchAdd(1, .monotonic) < b.limit) return true;
+        _ = b.active.fetchSub(1, .monotonic);
+        return false;
+    }
+    pub fn release(b: *ConnectionBudget) void {
+        _ = b.active.fetchSub(1, .monotonic);
+    }
+};
+pub const HeaderState = struct {
+    state: std.atomic.Value(u8) = .init(0), // waiting / complete / expired
+    pub fn complete(h: *HeaderState) bool {
+        return h.state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null;
+    }
+    pub fn expire(h: *HeaderState) bool {
+        return h.state.cmpxchgStrong(0, 2, .acq_rel, .acquire) == null;
+    }
+};
+
 pub const Config = struct {
+    mode: Mode = .explicit,
+    listen_address: net.IpAddress = .{ .ip4 = .loopback(0) },
+    receipt_point: receipt.Point = .proxy,
     /// Connections served at the same time. More are answered with 503.
     max_connections: u32 = 256,
+    /// Shared by all listeners for one app. Null preserves the per-proxy task-scope limit.
+    connection_budget: ?*ConnectionBudget = null,
+    /// Total time to receive a transparent HTTP head / TLS ClientHello; null preserves task-scope behavior.
+    header_timeout: ?Io.Duration = null,
     /// Largest request head (request line and headers).
     max_head_bytes: usize = 16 * 1024,
     /// Time allowed for the whole dial, all addresses together.
@@ -82,6 +120,9 @@ pub const Config = struct {
     resolver: ?Resolver = null,
     /// Grants consulted when the policy refuses a name. Owned by the caller.
     grants: ?*Grants = null,
+    /// App scopes: the live policy binding, read when each request is decided and again after its dial. Task
+    /// scopes leave this null.
+    live: ?live_policy.Source = null,
 };
 
 /// Resolves `host` (normalized, not an IP literal) into `out`, returning how many addresses were written.
@@ -114,11 +155,17 @@ pub const Proxy = struct {
         receipts: *receipt.Log,
         config: Config,
     ) StartError!*Proxy {
+        var server = try config.listen_address.listen(io, .{});
+        return startListening(gpa, io, pol, receipts, config, server) catch |err| {
+            server.deinit(io);
+            return err;
+        };
+    }
+
+    /// Takes ownership of an already-bound listener only on success.
+    pub fn startListening(gpa: std.mem.Allocator, io: Io, pol: *const policy.Policy, receipts: *receipt.Log, config: Config, server: net.Server) StartError!*Proxy {
         const p = try gpa.create(Proxy);
         errdefer gpa.destroy(p);
-        const addr: net.IpAddress = .{ .ip4 = .loopback(0) };
-        var server = try addr.listen(io, .{});
-        errdefer server.deinit(io);
         p.* = .{
             .gpa = gpa,
             .io = io,
@@ -140,6 +187,15 @@ pub const Proxy = struct {
         p.gpa.destroy(p);
     }
 
+    fn writeEntry(p: *Proxy, entry: receipt.Entry) void {
+        var e = entry;
+        if (p.config.live) |source| if (source.current()) |view| {
+            e.decision = view.decision;
+            e.executable = view.executable;
+        };
+        p.receipts.write(e);
+    }
+
     fn acceptLoop(p: *Proxy) Io.Cancelable!void {
         const io = p.io;
         while (true) {
@@ -148,13 +204,18 @@ pub const Proxy = struct {
                 error.ConnectionAborted, error.WouldBlock => continue,
                 error.SocketNotListening => return,
                 else => {
-                    p.receipts.write(.{ .event = "warning", .point = .proxy, .reason = "accept_failed", .detail = @errorName(err) });
+                    p.writeEntry(.{ .event = "warning", .point = p.config.receipt_point, .reason = "accept_failed", .detail = @errorName(err) });
                     try io.sleep(.fromMilliseconds(100), .awake);
                     continue;
                 },
             };
-            if (p.active.fetchAdd(1, .monotonic) >= p.config.max_connections) {
-                _ = p.active.fetchSub(1, .monotonic);
+            if (!p.acquire()) {
+                if (p.config.header_timeout != null) {
+                    // Never block accept on an overload response to a client which does not read.
+                    p.writeEntry(.{ .event = "connection_limit", .point = p.config.receipt_point, .verdict = .deny, .reason = "app_connection_limit" });
+                    stream.close(io);
+                    continue;
+                }
                 var wbuf: [256]u8 = undefined;
                 var w = stream.writer(io, &wbuf);
                 w.interface.writeAll("HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n") catch {};
@@ -163,22 +224,52 @@ pub const Proxy = struct {
                 continue;
             }
             p.group.concurrent(io, serveConnection, .{ p, stream }) catch {
-                _ = p.active.fetchSub(1, .monotonic);
+                p.release();
                 stream.close(io);
             };
         }
+    }
+    fn acquire(p: *Proxy) bool {
+        if (p.config.connection_budget) |b| return b.acquire();
+        if (p.active.fetchAdd(1, .monotonic) < p.config.max_connections) return true;
+        _ = p.active.fetchSub(1, .monotonic);
+        return false;
+    }
+    fn release(p: *Proxy) void {
+        if (p.config.connection_budget) |b| b.release() else _ = p.active.fetchSub(1, .monotonic);
     }
 
     fn serveConnection(p: *Proxy, stream: net.Stream) Io.Cancelable!void {
         defer {
             stream.close(p.io);
-            _ = p.active.fetchSub(1, .monotonic);
+            p.release();
         }
         var conn: Connection = undefined;
         conn.init(p, stream);
+        if (p.config.live) |source| {
+            if (source.paused.load(.acquire) or conn.view == null or !conn.view.?.serve) {
+                conn.writeEntry(.{ .event = "connect", .point = p.config.receipt_point, .verdict = .deny, .reason = if (conn.view != null and !conn.view.?.serve) "retired_app_after_restart" else "policy_change_in_progress" });
+                return;
+            }
+        }
+        var guard: ?Io.Future(Io.Cancelable!void) = if (p.config.header_timeout) |duration|
+            p.io.concurrent(headerDeadline, .{ &conn, duration }) catch {
+                conn.writeEntry(.{ .event = "header_timeout", .point = p.config.receipt_point, .verdict = .deny, .reason = "header_watchdog_failed" });
+                return;
+            }
+        else
+            null;
+        defer if (guard) |*g| g.cancel(p.io) catch {};
         conn.serve() catch |err| switch (err) {
             error.Canceled => |e| return e,
         };
+    }
+    fn headerDeadline(c: *Connection, duration: Io.Duration) Io.Cancelable!void {
+        try c.io.sleep(duration, .awake);
+        if (c.header.expire()) {
+            shutdownProtected(c.io, c.client, .both);
+            c.writeEntry(.{ .event = "header_timeout", .point = c.p.config.receipt_point, .verdict = .deny, .reason = "header_timeout" });
+        }
     }
 };
 
@@ -191,6 +282,9 @@ const Connection = struct {
     out_buf: [4096]u8,
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
+    header: HeaderState,
+    /// App scopes: the binding read at accept, replaced by the one each decision used. It labels receipts.
+    view: ?live_policy.Binding,
 
     fn init(c: *Connection, p: *Proxy, stream: net.Stream) void {
         c.p = p;
@@ -198,9 +292,21 @@ const Connection = struct {
         c.client = stream;
         c.reader = stream.reader(p.io, &c.in_buf);
         c.writer = stream.writer(p.io, &c.out_buf);
+        c.header = .{};
+        c.view = if (p.config.live) |source| source.current() else null;
+    }
+
+    fn writeEntry(c: *Connection, entry: receipt.Entry) void {
+        var e = entry;
+        if (c.view) |view| {
+            e.decision = view.decision;
+            e.executable = view.executable;
+        }
+        c.p.receipts.write(e);
     }
 
     fn serve(c: *Connection) Io.Cancelable!void {
+        if (c.p.config.mode == .transparent_tls) return c.serveTls();
         var hs = http.Server.init(&c.reader.interface, &c.writer.interface);
         hs.reader.max_head_len = @min(c.p.config.max_head_bytes, c.in_buf.len);
         var req = hs.receiveHead() catch |err| switch (err) {
@@ -208,7 +314,11 @@ const Connection = struct {
             error.HttpHeadersOversize => return c.badRequest("431 Request Header Fields Too Large", "headers_too_large", null),
             error.HttpHeadersInvalid => return c.badRequest("400 Bad Request", "invalid_request", null),
         };
-        if (req.head.method == .CONNECT) return c.serveConnect(&req);
+        if (!c.header.complete()) return;
+        if (req.head.method == .CONNECT) {
+            if (c.p.config.mode != .explicit) return c.badRequest("400 Bad Request", "connect_not_supported", "http");
+            return c.serveConnect(&req);
+        }
         return c.servePlain(&req);
     }
 
@@ -219,9 +329,9 @@ const Connection = struct {
     }
 
     fn badRequest(c: *Connection, status: []const u8, detail: []const u8, event: ?[]const u8) Io.Cancelable!void {
-        c.p.receipts.write(.{
+        c.writeEntry(.{
             .event = event orelse "http",
-            .point = .proxy,
+            .point = c.p.config.receipt_point,
             .verdict = .deny,
             .reason = "bad_request",
             .detail = detail,
@@ -231,6 +341,10 @@ const Connection = struct {
     }
 
     fn respondError(c: *Connection, status: []const u8, body: []const u8) void {
+        if (c.p.config.mode == .transparent_tls) {
+            shutdownProtected(c.io, c.client, .both);
+            return;
+        }
         const w = &c.writer.interface;
         w.print("HTTP/1.1 {s}\r\ncontent-type: text/plain\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n{s}", .{
             status, body.len, body,
@@ -254,6 +368,7 @@ const Connection = struct {
 
         const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
         defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
         const wait_ms = t0.untilNow(c.io, .awake).toMilliseconds();
 
         // A grant's expiry or revocation closes the tunnel, not only new connections. No watchdog, no tunnel.
@@ -306,6 +421,13 @@ const Connection = struct {
             shutdownProtected(c.io, c.client, .both);
             return;
         }
+        // The client may have sent its first bytes long after the dial: decide once more before they go out.
+        if (!c.recheck(&d)) {
+            c.writeReceipt(&d);
+            shutdownProtected(c.io, upstream, .both);
+            shutdownProtected(c.io, c.client, .both);
+            return;
+        }
         c.writeReceipt(&d);
 
         var down_buf: [16 * 1024]u8 = undefined;
@@ -326,11 +448,50 @@ const Connection = struct {
         try down.await(c.io);
     }
 
+    /// Transparent TLS routes by the one unambiguous ClientHello name, before dialing.
+    fn serveTls(c: *Connection) Io.Cancelable!void {
+        var d: Decision = .{ .event = "connect", .port = 443 };
+        const r = &c.reader.interface;
+        const hdr = r.peek(5) catch return c.badRequest("400 Bad Request", "tls_unparsed", "connect");
+        const n = std.mem.readInt(u16, hdr[3..5], .big);
+        if (hdr[0] != 0x16 or n > tls_record_max - 5) return c.badRequest("400 Bad Request", "not_tls", "connect");
+        const record = r.peek(5 + @as(usize, n)) catch return c.badRequest("400 Bad Request", "tls_unparsed", "connect");
+        const name = (parseSni(record) catch return c.badRequest("400 Bad Request", "tls_unparsed", "connect")) orelse
+            return c.badRequest("400 Bad Request", "sni_missing", "connect");
+        if (!c.header.complete()) return;
+        if (policy.parseIpLiteral(name) != null) return c.badRequest("400 Bad Request", "sni_not_name", "connect");
+        const t0 = Io.Clock.awake.now(c.io);
+        var addrs_buf: [max_dial]net.IpAddress = undefined;
+        const addrs = try c.decide(&d, name, 443, &addrs_buf);
+        if (!d.allowed) return c.refuse(&d);
+        const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
+        defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
+        d.detail = "transparent_sni";
+        var watchdog = c.armWatchdog(&d, upstream) catch return c.refuse(&d);
+        defer if (watchdog) |*f| f.cancel(c.io) catch {};
+        c.writeReceipt(&d);
+        var down_buf: [16 * 1024]u8 = undefined;
+        var down_reader = upstream.reader(c.io, &down_buf);
+        var down = c.io.concurrent(pump, .{ &down_reader, &c.writer }) catch {
+            shutdownProtected(c.io, upstream, .both);
+            return;
+        };
+        defer down.cancel(c.io) catch {};
+        var up_buf: [0]u8 = undefined;
+        var up_writer = upstream.writer(c.io, &up_buf);
+        pump(&c.reader, &up_writer) catch |err| {
+            down.cancel(c.io) catch {};
+            return err;
+        };
+        try down.await(c.io);
+    }
+
     fn servePlain(c: *Connection, req: *http.Server.Request) Io.Cancelable!void {
         // The head is forwarded, so it must be unambiguous: an upstream that splits lines on a bare LF would
         // otherwise read headers the proxy never saw (a second Host, a second Content-Length).
         if (!headIsClean(req)) return c.badRequest("400 Bad Request", "invalid_request", "http");
-        const url = parseHttpUrl(req.head.target) catch |err| {
+        const url = (if (c.p.config.mode == .transparent_http) originUrl(req) else parseHttpUrl(req.head.target)) catch |err| {
             const detail = if (err == error.HttpsNeedsConnect) "https_needs_connect" else "invalid_url";
             return c.badRequest("400 Bad Request", detail, "http");
         };
@@ -343,6 +504,7 @@ const Connection = struct {
 
         const upstream = (try c.dial(&d, addrs, t0)) orelse return c.refuse(&d);
         defer upstream.close(c.io);
+        if (!c.recheck(&d)) return c.refuse(&d);
         var watchdog = c.armWatchdog(&d, upstream) catch return c.refuse(&d);
         defer if (watchdog) |*f| f.cancel(c.io) catch {};
         c.writeReceipt(&d);
@@ -372,6 +534,14 @@ const Connection = struct {
     /// For a connection allowed by a grant, starts the task that closes it when the grant expires or is
     /// revoked. Fails (filling `d` as a refusal) when that task cannot start, so a grant is never unbounded.
     fn armWatchdog(c: *Connection, d: *Decision, upstream: net.Stream) error{WatchdogFailed}!?Io.Future(Io.Cancelable!void) {
+        if (c.p.config.live != null) {
+            std.debug.assert(c.p.config.grants == null);
+            if (c.io.concurrent(watchPolicy, .{ c.p, c.client, upstream, d.host, d.ip_buf[0..d.ip_len], d.port })) |f| return f else |_| {}
+            d.allowed = false;
+            d.reason = "policy_watchdog_failed";
+            d.status = "503 Service Unavailable";
+            return error.WatchdogFailed;
+        }
         const g = d.grant orelse return null;
         const fail = builtin.is_test and test_fail_watchdog;
         if (!fail) {
@@ -393,9 +563,53 @@ const Connection = struct {
         return c.canceled();
     }
 
+    /// App scopes only: takes the policy binding in force now into `c.view`, so the decision and its receipt use
+    /// the generation in force when the request arrived. False, with `d` filled as a refusal, while a policy
+    /// change is being published or when the app was removed before the service restarted.
+    fn bindNow(c: *Connection, d: *Decision) bool {
+        const source = c.p.config.live orelse return true;
+        if (source.capture()) |view| {
+            c.view = view;
+            return true;
+        }
+        const now = source.current();
+        if (now) |view| c.view = view;
+        d.allowed = false;
+        d.rule = null;
+        if (now != null and !now.?.serve) {
+            d.policy_denied = true;
+            d.reason = "retired_app_after_restart";
+        } else {
+            d.policy_denied = false;
+            d.reason = "policy_change_in_progress";
+            d.status = "503 Service Unavailable";
+        }
+        return false;
+    }
+
+    /// App scopes only: decides again, after the dial and before any byte is forwarded, with the binding in force
+    /// now. A policy change published while the proxy resolved and dialed is applied here, before the first
+    /// byte; one published after this check is left to the watchdog. False, with `d` filled as a refusal.
+    fn recheck(c: *Connection, d: *Decision) bool {
+        if (c.p.config.live == null) return true;
+        if (!c.bindNow(d)) {
+            d.detail = "rechecked_after_dial";
+            return false;
+        }
+        const ip = if (d.ip_len > 0) policy.parseIpLiteral(d.ip_buf[0..d.ip_len]) else null;
+        const v = live_policy.verdict(c.view.?, d.host, d.port, ip);
+        d.setVerdict(v);
+        if (!v.allowed) d.detail = "rechecked_after_dial";
+        return v.allowed;
+    }
+
     /// Fills `d` with the policy decision and returns the addresses that may be dialed.
     fn decide(c: *Connection, d: *Decision, host_raw: []const u8, port: u16, buf: *[max_dial]net.IpAddress) Io.Cancelable![]net.IpAddress {
-        const pol = c.p.policy;
+        if (!c.bindNow(d)) {
+            d.host = policy.normalizeHost(&d.host_buf, host_raw) catch host_raw;
+            return buf[0..0];
+        }
+        const pol = if (c.view) |view| view.policy else c.p.policy;
         const pv = pol.checkPort(port);
         if (!pv.allowed) {
             d.host = policy.normalizeHost(&d.host_buf, host_raw) catch host_raw;
@@ -581,9 +795,9 @@ const Connection = struct {
         // a swallowed cancelation would leave the connection waiting on its pumps while the proxy stops.
         const old = c.io.swapCancelProtection(.blocked);
         defer _ = c.io.swapCancelProtection(old);
-        c.p.receipts.write(.{
+        c.writeEntry(.{
             .event = d.event,
-            .point = .proxy,
+            .point = c.p.config.receipt_point,
             .verdict = if (d.allowed) .allow else .deny,
             .reason = d.reason,
             .rule = d.rule,
@@ -788,6 +1002,38 @@ fn sleepFor(io: Io, d: Io.Duration) Io.Cancelable!void {
     return io.sleep(d, .awake);
 }
 
+/// Reuse the grant watchdog's bounded polling and reset semantics. A widening never
+/// interrupts an allowed transfer. Retired slots keep their old immutable view.
+fn watchPolicy(p: *Proxy, client: net.Stream, upstream: net.Stream, host: []const u8, ip: []const u8, port: u16) Io.Cancelable!void {
+    const source = p.config.live.?;
+    const resolved = if (ip.len > 0) policy.parseIpLiteral(ip) else null;
+    while (true) {
+        const view = source.current();
+        if (view == null or !live_policy.permits(view.?, host, port, resolved)) {
+            p.receipts.write(.{
+                .event = "policy_changed",
+                .point = p.config.receipt_point,
+                .verdict = .deny,
+                .reason = "policy_narrowed",
+                .host = host,
+                .ip = if (ip.len > 0) ip else null,
+                .port = port,
+                .detail = "connection_reset watchdog_ms=200",
+                .decision = if (view) |v| v.decision else null,
+                .executable = if (view) |v| v.executable else null,
+            });
+            // As with watchGrant, no receipt I/O follows shutdown: the pumps
+            // wake and their close drops queued bytes with SO_LINGER=0.
+            abortOnClose(upstream);
+            abortOnClose(client);
+            shutdownProtected(p.io, upstream, .both);
+            shutdownProtected(p.io, client, .both);
+            return;
+        }
+        try p.io.sleep(.fromMilliseconds(200), .awake);
+    }
+}
+
 /// Closes a connection opened under a grant once the grant expires or is revoked, with a receipt. Follows
 /// extensions: the deadline is re-read from the grant table on every tick.
 /// `ip` and `port` repeat the connection's own receipt, so each reset can be matched to its connection.
@@ -809,7 +1055,7 @@ fn watchGrant(p: *Proxy, id: u64, first_deadline: Io.Timestamp, client: net.Stre
     };
     p.receipts.write(.{
         .event = event,
-        .point = .proxy,
+        .point = p.config.receipt_point,
         .verdict = .deny,
         .reason = reason,
         .host = host,
@@ -962,6 +1208,25 @@ pub const HttpUrl = struct {
     path: []const u8,
 };
 
+/// Origin-form requests need exactly one Host; no absolute URI or CONNECT tunnel is accepted.
+pub fn originUrl(req: *const http.Server.Request) !HttpUrl {
+    var host: ?[]const u8 = null;
+    var it = req.iterateHeaders();
+    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "host")) {
+        if (host != null) return error.InvalidUrl;
+        host = h.value;
+    };
+    return parseOriginTarget(req.head.target, host orelse return error.InvalidUrl);
+}
+
+pub fn parseOriginTarget(target: []const u8, host: []const u8) error{InvalidUrl}!HttpUrl {
+    if (target.len == 0 or target[0] != '/' or std.mem.startsWith(u8, target, "//")) return error.InvalidUrl;
+    for (target) |ch| if (ch <= 0x20 or ch >= 0x7f or ch == '#' or ch == '\\') return error.InvalidUrl;
+    const auth = parseAuthority(host, 80) catch return error.InvalidUrl;
+    if (auth.port != 80 or policy.parseIpLiteral(auth.host) != null) return error.InvalidUrl;
+    return .{ .authority = host, .host = auth.host, .port = 80, .path = target };
+}
+
 pub fn parseHttpUrl(target: []const u8) error{ InvalidUrl, HttpsNeedsConnect }!HttpUrl {
     const scheme_end = std.mem.find(u8, target, "://") orelse return error.InvalidUrl;
     const scheme = target[0..scheme_end];
@@ -997,23 +1262,28 @@ pub fn parseSni(record: []const u8) error{Malformed}!?[]const u8 {
     _ = try ch.bytes(try ch.byte()); // compression methods
     if (ch.pos == ch.data.len) return null; // no extensions
     var exts: ByteReader = .{ .data = try ch.bytes(try ch.int(u16)) };
+    if (ch.pos != ch.data.len or hs.pos != hs.data.len or r.pos != r.data.len) return error.Malformed;
+    var name_seen: ?[]const u8 = null;
+    var server_name_seen = false;
     while (exts.pos < exts.data.len) {
         const ext_type = try exts.int(u16);
         const ext = try exts.bytes(try exts.int(u16));
         if (ext_type != 0) continue; // server_name
+        if (server_name_seen) return error.Malformed;
+        server_name_seen = true;
         var list_r: ByteReader = .{ .data = ext };
         var list: ByteReader = .{ .data = try list_r.bytes(try list_r.int(u16)) };
+        if (list_r.pos != list_r.data.len) return error.Malformed;
         while (list.pos < list.data.len) {
             const name_type = try list.byte();
             const name = try list.bytes(try list.int(u16));
             if (name_type == 0) {
-                if (name.len == 0) return error.Malformed;
-                return name;
+                if (name.len == 0 or name_seen != null) return error.Malformed;
+                name_seen = name;
             }
         }
-        return null;
     }
-    return null;
+    return name_seen;
 }
 
 const ByteReader = struct {

@@ -82,6 +82,29 @@ func securityRegressions() throws {
     let (_, next) = try configuration(gen: 2)
     try ConfigurationUpdate.validate(next, replacing: config)
     rejects("host rejects rollback") { try ConfigurationUpdate.validate(config, replacing: next) }
+    // Requests that would be refused fail before the user is asked to authenticate.
+    let (savedData, _) = try configuration()
+    let enabled = SavedFilterState(exists: true, enabled: true, configuration: savedData)
+    let disabled = SavedFilterState(exists: true, enabled: false, configuration: savedData)
+    let nothing = SavedFilterState(exists: false, enabled: false, configuration: nil)
+    expect(HostPrecondition.refusal(.enable, candidate: config, saved: enabled) == "update_requires_higher_generation" &&
+           HostPrecondition.refusal(.enable, candidate: config, saved: disabled) == "update_requires_higher_generation",
+           "same generation refused before the prompt")
+    expect(HostPrecondition.refusal(.enable, candidate: next, saved: enabled) == nil &&
+           HostPrecondition.refusal(.enable, candidate: config, saved: nothing) == nil, "higher or first generation goes to the prompt")
+    for unreadable in [Data("{}".utf8), nil] as [Data?] {
+        expect(HostPrecondition.refusal(.enable, candidate: next, saved: SavedFilterState(exists: true, enabled: true, configuration: unreadable)) ==
+               "invalid_saved_configuration", "unreadable saved configuration refused before the prompt")
+    }
+    expect(HostPrecondition.refusal(.enable, candidate: nil, saved: nothing) == "invalid_configuration", "enable needs a candidate")
+    expect(HostPrecondition.refusal(.disable, candidate: nil, saved: nothing) == "no_owned_configuration" &&
+           HostPrecondition.refusal(.disable, candidate: nil, saved: enabled) == nil, "disable needs a saved configuration")
+    expect(HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: enabled) == "disable_before_removal" &&
+           HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: nothing) == "no_owned_configuration" &&
+           HostPrecondition.refusal(.removeConfiguration, candidate: nil, saved: disabled) == nil, "remove-config needs a disabled saved configuration")
+    expect(HostPrecondition.refusal(.deactivate, candidate: nil, saved: enabled) == "disable_before_deactivation" &&
+           HostPrecondition.refusal(.deactivate, candidate: nil, saved: nothing) == nil &&
+           HostPrecondition.refusal(.activate, candidate: nil, saved: enabled) == nil, "deactivate needs the filter disabled")
 
     let (_, domains) = try configuration(policy: #"{"mode":"allowlist","allow":["*.example.com"]}"#, hostnameMode: "os-metadata")
     let domain = AppEvaluator.evaluate(flow(hostname: "API.Example.com."), configuration: domains)

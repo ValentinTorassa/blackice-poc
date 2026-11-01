@@ -98,6 +98,41 @@ enum PresenceGate {
     }
 }
 
+/// The saved filter preference as the host loaded it.
+struct SavedFilterState {
+    let exists: Bool
+    let enabled: Bool
+    let configuration: Data?
+}
+
+enum HostPrecondition {
+    /// Why an action would be refused. The host checks this before asking for
+    /// user presence, so an approval is never spent on a request that fails
+    /// anyway, and again on the state it reloads after authentication.
+    static func refusal(_ action: HostAction, candidate: AppConfiguration?, saved: SavedFilterState) -> String? {
+        switch action {
+        case .activate:
+            return nil
+        case .enable:
+            guard let candidate else { return "invalid_configuration" }
+            guard saved.exists else { return nil }
+            guard let data = saved.configuration, let current = try? AppConfiguration(data: data) else {
+                return "invalid_saved_configuration"
+            }
+            do { try ConfigurationUpdate.validate(candidate, replacing: current) }
+            catch { return "update_requires_higher_generation" }
+            return nil
+        case .disable:
+            return saved.exists ? nil : "no_owned_configuration"
+        case .removeConfiguration:
+            if saved.enabled { return "disable_before_removal" }
+            return saved.exists ? nil : "no_owned_configuration"
+        case .deactivate:
+            return saved.enabled ? "disable_before_deactivation" : nil
+        }
+    }
+}
+
 enum ConfigurationUpdate {
     static func validate(_ candidate: AppConfiguration, replacing current: AppConfiguration?) throws {
         if let current, candidate.generation <= current.generation {

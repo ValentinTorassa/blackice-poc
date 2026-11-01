@@ -465,7 +465,13 @@ aborts the operation and requires review and retry. No app binding is silently
 omitted from the summary; real dialog layout remains a signed-run test gate.
 Touch ID reuse duration is zero. Cancellation, unavailable
 authentication or failure prevents the mutation; there is no CLI/environment
-bypass or cached owner authorization. A confined app cannot change the filter
+bypass or cached owner authorization. A request that would be refused anyway
+fails before the prompt, so no approval is spent on it: `enable` with a
+generation that is not above the saved one (`update_requires_higher_generation`)
+or over an unreadable saved configuration (`invalid_saved_configuration`),
+`disable` or `remove-config` with nothing saved (`no_owned_configuration`), and
+`remove-config` or `deactivate` while the filter is enabled. The same checks run
+again on the preferences reloaded after authentication. A confined app cannot change the filter
 through this helper without user authentication. This does not prevent a user
 from approving a malicious request or using macOS's own administration controls.
 macOS separately enforces entitlement/profile and system-consent requirements.

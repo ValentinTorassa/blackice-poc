@@ -32,11 +32,26 @@ func requireSignedHost() {
     }
 }
 
+extension SavedFilterState {
+    init(_ manager: NEFilterManager) {
+        self.init(exists: manager.providerConfiguration != nil, enabled: manager.isEnabled,
+                  configuration: manager.providerConfiguration?.vendorConfiguration?[AppFilterConstants.configurationKey] as? Data)
+    }
+}
+
+func refuseUnlessReady(_ action: HostAction, candidate: AppConfiguration?, _ manager: NEFilterManager) {
+    if let reason = HostPrecondition.refusal(action, candidate: candidate, saved: SavedFilterState(manager)) {
+        fail(reason)
+    }
+}
+
 func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
                        perform: @escaping (NEFilterManager) -> Void) {
     requireSignedHost()
     let parent = AuthorizationParent.current()
     loadManager { manager in
+        // A request that would be refused anyway fails before the prompt.
+        refuseUnlessReady(action, candidate: candidate, manager)
         // Capture immutable preference values before prompting, then check that
         // the policy described to the user has not changed during authentication.
         let previousVendor = manager.providerConfiguration?.vendorConfiguration as NSDictionary?
@@ -61,6 +76,7 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
                           previousExists == (current.providerConfiguration != nil) else {
                         fail("configuration_changed_during_authentication: review and retry")
                     }
+                    refuseUnlessReady(action, candidate: candidate, current)
                     auditControl(action, parent: parent.pid, approved: true)
                     perform(current)
                 }
@@ -176,16 +192,6 @@ do {
         let data = try readBounded(args[1])
         let candidate = try AppConfiguration(data: data)
         withOwnerPresence(.enable, candidate: candidate) { manager in
-            do {
-                var current: AppConfiguration?
-                if let existing = manager.providerConfiguration {
-                    guard let saved = existing.vendorConfiguration?[AppFilterConstants.configurationKey] as? Data else {
-                        fail("invalid_saved_configuration")
-                    }
-                    current = try AppConfiguration(data: saved)
-                }
-                try ConfigurationUpdate.validate(candidate, replacing: current)
-            } catch { fail("update_requires_valid_higher_generation") }
             let provider = NEFilterProviderConfiguration()
             provider.filterSockets = true
             provider.filterPackets = false
@@ -204,7 +210,6 @@ do {
         }
     case "disable" where args.count == 1:
         withOwnerPresence(.disable) { manager in
-            guard manager.providerConfiguration != nil else { fail("no_owned_configuration") }
             manager.isEnabled = false
             manager.saveToPreferences { error in
                 guard error == nil else { fail("filter_disable_failed") }
@@ -213,16 +218,13 @@ do {
         }
     case "remove-config" where args.count == 1:
         withOwnerPresence(.removeConfiguration) { manager in
-            guard !manager.isEnabled else { fail("disable_before_removal") }
-            guard manager.providerConfiguration != nil else { fail("no_owned_configuration") }
             manager.removeFromPreferences { error in
                 guard error == nil else { fail("filter_remove_failed") }
                 output(["state": "owned_configuration_removed", "enforcement_verified": false]); exit(0)
             }
         }
     case "deactivate" where args.count == 1:
-        withOwnerPresence(.deactivate) { manager in
-            guard !manager.isEnabled else { fail("disable_before_deactivation") }
+        withOwnerPresence(.deactivate) { _ in
             let request = OSSystemExtensionRequest.deactivationRequest(forExtensionWithIdentifier: AppFilterConstants.extensionBundleID,
                                                                       queue: .main)
             request.delegate = delegate

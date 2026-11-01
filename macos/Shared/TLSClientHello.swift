@@ -77,6 +77,10 @@ struct TLSInspection {
     let expectedHost: String
     private(set) var echPresent = false
 
+    // Explicit: before Swift 6.4 the memberwise initializer is private because
+    // `bytes` is, and the provider could not create an inspection.
+    init(expectedHost: String) { self.expectedHost = expectedHost }
+
     mutating func receive(_ data: Data, offset: Int) -> TLSHelloResult {
         guard offset >= 0, offset <= bytes.count, data.count <= TLSClientHello.maximumBytes - offset else {
             return .deny("tls_unparsed")

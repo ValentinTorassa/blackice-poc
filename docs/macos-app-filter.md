@@ -521,8 +521,9 @@ enforcement test was performed.
 
 CI compiles both bundles and runs these tests on every pull request on GitHub's
 `macos-latest` runner (`macos app filter` job), with whatever Command Line Tools
-that image ships. That checks compilation and unit behaviour only; the runner
-never signs, installs or activates the extension.
+that image ships (Swift 6.3.3 and the macOS 26.5 SDK when the job was added).
+That checks compilation and unit behaviour only; the runner never signs,
+installs or activates the extension.
 
 Tests cover exact/wildcard matching, private and mapped addresses, IPv6 CIDRs,
 ports, strict configuration, identity binding isolation, inbound denial,

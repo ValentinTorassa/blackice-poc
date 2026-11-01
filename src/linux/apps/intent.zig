@@ -92,33 +92,91 @@ pub fn writeHistory(gpa: std.mem.Allocator, io: std.Io, h: *const History, candi
     try host.atomicWrite(dir, io, "intent.json", bytes, true);
 }
 
-pub const Pending = struct { generation: u32, old_policy: [64]u8, new_policy: [64]u8 };
+/// The record of a reload in progress, written before its first stage and cleared once it is settled. `boot` is
+/// the boot that wrote it; null only in records written before the boot was recorded.
+pub const Pending = struct { generation: u32, old_policy: [64]u8, new_policy: [64]u8, boot: ?[36]u8 = null };
+const PendingWire = struct { generation: u32, old_policy: []const u8, new_policy: []const u8, boot_id: ?[]const u8 = null };
+const pending_name = "reload-pending.json";
+
+/// Records the current boot with the change.
 pub fn pendingWrite(gpa: std.mem.Allocator, io: std.Io, value: Pending) !void {
-    const bytes = try std.json.Stringify.valueAlloc(gpa, value, .{});
-    defer gpa.free(bytes);
+    var record = value;
+    record.boot = try bootId();
     var dir = try std.Io.Dir.openDirAbsolute(io, host.state_root, .{});
     defer dir.close(io);
-    try host.atomicWrite(dir, io, "reload-pending.json", bytes, true);
+    try pendingWriteIn(gpa, io, dir, record);
+}
+pub fn pendingWriteIn(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, value: Pending) !void {
+    const boot = value.boot orelse return error.InvalidIntent;
+    const bytes = try std.json.Stringify.valueAlloc(gpa, PendingWire{ .generation = value.generation, .old_policy = &value.old_policy, .new_policy = &value.new_policy, .boot_id = &boot }, .{});
+    defer gpa.free(bytes);
+    try host.atomicWrite(dir, io, pending_name, bytes, true);
 }
 pub fn pendingRead(gpa: std.mem.Allocator, io: std.Io) !?Pending {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io, host.state_root ++ "/reload-pending.json", gpa, .limited(2048)) catch |err| {
+    var dir = try std.Io.Dir.openDirAbsolute(io, host.state_root, .{});
+    defer dir.close(io);
+    return pendingReadIn(gpa, io, dir);
+}
+pub fn pendingReadIn(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !?Pending {
+    const bytes = dir.readFileAlloc(io, pending_name, gpa, .limited(2048)) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
     defer gpa.free(bytes);
-    const parsed = try std.json.parseFromSlice(Pending, gpa, bytes, .{ .duplicate_field_behavior = .@"error" });
+    const parsed = std.json.parseFromSlice(PendingWire, gpa, bytes, .{ .duplicate_field_behavior = .@"error" }) catch return error.InvalidIntent;
     defer parsed.deinit();
-    if (parsed.value.generation < 2 or parsed.value.generation > max_generations) return error.InvalidIntent;
-    for (parsed.value.old_policy ++ parsed.value.new_policy) |ch| if (!((ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f'))) return error.InvalidIntent;
-    return parsed.value;
+    const w = parsed.value;
+    if (w.generation < 2 or w.generation > max_generations or !isDigest(w.old_policy) or !isDigest(w.new_policy)) return error.InvalidIntent;
+    var result: Pending = .{ .generation = w.generation, .old_policy = w.old_policy[0..64].*, .new_policy = w.new_policy[0..64].* };
+    if (w.boot_id) |boot| {
+        if (!validBoot(boot)) return error.InvalidIntent;
+        result.boot = boot[0..36].*;
+    }
+    return result;
+}
+fn isDigest(value: []const u8) bool {
+    if (value.len != 64) return false;
+    for (value) |ch| if (!((ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f'))) return false;
+    return true;
 }
 pub fn pendingClear(io: std.Io) !void {
     var dir = try std.Io.Dir.openDirAbsolute(io, host.state_root, .{});
     defer dir.close(io);
-    dir.deleteFile(io, "reload-pending.json") catch |err| if (err != error.FileNotFound) return err;
+    try pendingClearIn(io, dir);
+}
+pub fn pendingClearIn(io: std.Io, dir: std.Io.Dir) !void {
+    dir.deleteFile(io, pending_name) catch |err| if (err != error.FileNotFound) return err;
     const fd = try sys.fd(sys.l.openat(dir.handle, ".", .{ .DIRECTORY = true, .CLOEXEC = true, .NOFOLLOW = true }, 0));
     defer sys.close(fd);
     _ = try sys.check(sys.l.fsync(fd));
+}
+
+/// The service receipt that settles a pending record.
+pub const Settled = struct { event: []const u8, reason: []const u8, detail: []const u8 };
+const restart_detail = "persisted_intent_authoritative; retired_slots_not_served";
+/// A record from another boot belongs to an arming that ended with that boot, whatever its hashes say.
+const from_another_boot: Settled = .{ .event = "policy_change_failed", .reason = "interrupted_by_reboot", .detail = "pending_record_from_another_boot" };
+/// A record that cannot be read. `on` and `off` settle it too, so it can never block them.
+pub const unreadable: Settled = .{ .event = "policy_change_failed", .reason = "invalid_pending_record", .detail = "pending_record_unreadable" };
+
+/// An armed restart. In the same boot the intent decides: completed when it names the record's new
+/// generation, interrupted when it still names the previous one. Anything else in the same boot contradicts the
+/// commit order, so startup refuses with admission still fenced. A record from another boot is settled without
+/// comparing it with the current arming, which started after that boot.
+pub fn settleAtRestart(p: Pending, boot: *const [36]u8, generation: u32, digest: *const [64]u8) error{InvalidPendingReload}!Settled {
+    if (p.boot) |recorded| if (!std.mem.eql(u8, &recorded, boot)) return from_another_boot;
+    if (std.mem.eql(u8, &p.new_policy, digest) and p.generation == generation)
+        return .{ .event = "policy_change_completed_after_restart", .reason = "completed_after_restart", .detail = restart_detail };
+    if (std.mem.eql(u8, &p.old_policy, digest) and p.generation == generation + 1)
+        return .{ .event = "policy_change_failed", .reason = "interrupted", .detail = restart_detail };
+    return error.InvalidPendingReload;
+}
+
+/// `app on` (a new arming) or `app off`. The record's arming has ended, by a reboot, an off or lost pins, so the
+/// record is settled and cleared instead of being left for a later restart to compare with another arming.
+pub fn settleAtArmingChange(p: Pending, boot: *const [36]u8) Settled {
+    if (p.boot) |recorded| if (!std.mem.eql(u8, &recorded, boot)) return from_another_boot;
+    return .{ .event = "policy_change_failed", .reason = "interrupted_arming_ended", .detail = "pending_record_settled_by_on_or_off" };
 }
 pub fn write(gpa: std.mem.Allocator, io: std.Io, armed: bool, digest: *const [64]u8) !void {
     const boot = try bootId();
@@ -179,4 +237,74 @@ test "appfilter v2 intent binds the ordered bounded history to the committed dig
         defer std.testing.allocator.free(malformed);
         try std.testing.expectError(error.InvalidIntent, parse(std.testing.allocator, malformed));
     }
+}
+
+test "appfilter pending reload record keeps its boot and reads older records without one" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    try std.testing.expectEqual(@as(?Pending, null), try pendingReadIn(gpa, io, tmp.dir));
+    const record: Pending = .{ .generation = 3, .old_policy = @splat('a'), .new_policy = @splat('b'), .boot = "00000000-0000-0000-0000-000000000001".* };
+    try pendingWriteIn(gpa, io, tmp.dir, record);
+    const got = (try pendingReadIn(gpa, io, tmp.dir)).?;
+    try std.testing.expectEqual(@as(u32, 3), got.generation);
+    try std.testing.expectEqualStrings(&record.boot.?, &got.boot.?);
+    try std.testing.expectEqualStrings(&record.new_policy, &got.new_policy);
+    var unbooted = record;
+    unbooted.boot = null;
+    try std.testing.expectError(error.InvalidIntent, pendingWriteIn(gpa, io, tmp.dir, unbooted));
+    const fields = "\"old_policy\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"new_policy\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"";
+    const legacy = "{\"generation\":2," ++ fields ++ "}";
+    try tmp.dir.writeFile(io, .{ .sub_path = pending_name, .data = legacy });
+    try std.testing.expectEqual(@as(?[36]u8, null), (try pendingReadIn(gpa, io, tmp.dir)).?.boot);
+    const bad_records = [_][]const u8{ "{", "{\"generation\":1," ++ fields ++ "}", "{\"generation\":2," ++ fields ++ ",\"boot_id\":\"not-a-boot\"}" };
+    for (bad_records) |bad| {
+        try tmp.dir.writeFile(io, .{ .sub_path = pending_name, .data = bad });
+        try std.testing.expectError(error.InvalidIntent, pendingReadIn(gpa, io, tmp.dir));
+    }
+    try pendingClearIn(io, tmp.dir);
+    try std.testing.expectEqual(@as(?Pending, null), try pendingReadIn(gpa, io, tmp.dir));
+    try pendingClearIn(io, tmp.dir);
+}
+
+test "appfilter restart settles a pending record from another boot and refuses an inconsistent one from this boot" {
+    const boot = "00000000-0000-0000-0000-000000000001".*;
+    const other = "00000000-0000-0000-0000-000000000002".*;
+    const old: [64]u8 = @splat('a');
+    const new: [64]u8 = @splat('b');
+    const unrelated: [64]u8 = @splat('c');
+    const record: Pending = .{ .generation = 2, .old_policy = old, .new_policy = new, .boot = boot };
+    try std.testing.expectEqualStrings("completed_after_restart", (try settleAtRestart(record, &boot, 2, &new)).reason);
+    try std.testing.expectEqualStrings("policy_change_completed_after_restart", (try settleAtRestart(record, &boot, 2, &new)).event);
+    try std.testing.expectEqualStrings("interrupted", (try settleAtRestart(record, &boot, 1, &old)).reason);
+    // Same boot, matching neither the committed generation nor its predecessor: fail closed.
+    try std.testing.expectError(error.InvalidPendingReload, settleAtRestart(record, &boot, 1, &unrelated));
+    try std.testing.expectError(error.InvalidPendingReload, settleAtRestart(record, &boot, 3, &new));
+    // Another boot: never compared with the current arming, even when the hashes happen to match it.
+    var stale = record;
+    stale.boot = other;
+    for ([_]struct { u32, *const [64]u8 }{ .{ 1, &unrelated }, .{ 1, &old }, .{ 2, &new } }) |arming| {
+        const settled = try settleAtRestart(stale, &boot, arming[0], arming[1]);
+        try std.testing.expectEqualStrings("policy_change_failed", settled.event);
+        try std.testing.expectEqualStrings("interrupted_by_reboot", settled.reason);
+    }
+    // A record without a boot keeps the same-boot rules.
+    var legacy = record;
+    legacy.boot = null;
+    try std.testing.expectError(error.InvalidPendingReload, settleAtRestart(legacy, &boot, 1, &unrelated));
+    try std.testing.expectEqualStrings("interrupted", (try settleAtRestart(legacy, &boot, 1, &old)).reason);
+}
+
+test "appfilter on and off settle any pending record" {
+    const boot = "00000000-0000-0000-0000-000000000001".*;
+    const record: Pending = .{ .generation = 2, .old_policy = @splat('a'), .new_policy = @splat('b'), .boot = "00000000-0000-0000-0000-000000000002".* };
+    try std.testing.expectEqualStrings("interrupted_by_reboot", settleAtArmingChange(record, &boot).reason);
+    var same = record;
+    same.boot = boot;
+    try std.testing.expectEqualStrings("interrupted_arming_ended", settleAtArmingChange(same, &boot).reason);
+    same.boot = null;
+    try std.testing.expectEqualStrings("interrupted_arming_ended", settleAtArmingChange(same, &boot).reason);
+    for ([_]Settled{ settleAtArmingChange(record, &boot), settleAtArmingChange(same, &boot), unreadable }) |settled|
+        try std.testing.expectEqualStrings("policy_change_failed", settled.event);
 }

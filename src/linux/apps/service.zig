@@ -103,6 +103,8 @@ fn run(init: std.process.Init) !void {
             const saved = (try intent.read(init.gpa, init.io)) orelse return error.MissingArmedIntent;
             if (!saved.armed or !std.mem.eql(u8, &saved.boot, &try intent.bootId())) return error.InvalidArmedIntent;
             try runtime.restoreHistory(saved);
+            // Checked while admission is still fenced: a record this boot cannot explain stops startup here.
+            const pending = try runtime.pendingAtRestart();
             const image = try reload_maps.Image.fromSnapshot(install.owner_uid, &runtime.history.head.load(.acquire).?.snapshot);
             try runtime.loaded.?.reconcile(image);
             try runtime.configureChecks();
@@ -120,7 +122,7 @@ fn run(init: std.process.Init) !void {
             runtime.service_log.?.generation = runtime.cfg.?.generation;
             try runtime.drain();
             runtime.service_log.?.write(.{ .event = "app_filter_restart", .point = .app_filter, .detail = "reopened verified pins; receipts drained; file identities refreshed; downtime=unknown" });
-            try runtime.recoveryReceipt();
+            try runtime.recoveryReceipt(pending);
         }
     } else {
         try kernel.requireVacant(cg);
@@ -452,6 +454,8 @@ const Runtime = struct {
         if (try intent.read(r.gpa, r.io)) |saved| {
             if (saved.armed and !std.mem.eql(u8, &saved.policy, &r.cfg.?.digest)) return error.PolicyChangeRequiresAuthorizedOff;
         }
+        // A new arming starts at generation 1. A reload record left by an earlier arming is settled now.
+        try r.settlePending();
         // Validate every executable and its ancestors before creating kernel objects.
         for (&initial.snapshot.slots) |*slot| if (slot.*) |*b| {
             b.identity = try r.identity(b.executable);
@@ -532,14 +536,31 @@ const Runtime = struct {
         r.cfg = &current.cfg;
         r.history.blocked_retired = retired; // Only slots already retired at this restart.
     }
-    fn recoveryReceipt(r: *Runtime) !void {
-        if (try intent.pendingRead(r.gpa, r.io)) |pending| {
-            const completed = std.mem.eql(u8, &pending.new_policy, &r.cfg.?.digest) and pending.generation == r.cfg.?.generation;
-            const aborted = std.mem.eql(u8, &pending.old_policy, &r.cfg.?.digest) and pending.generation == r.cfg.?.generation + 1;
-            if (!completed and !aborted) return error.InvalidPendingReload;
-            r.service_log.?.write(.{ .event = if (completed) "policy_change_completed_after_restart" else "policy_change_failed", .point = .app_filter, .reason = if (completed) "completed_after_restart" else "interrupted", .old_policy = &pending.old_policy, .new_policy = &pending.new_policy, .detail = "persisted_intent_authoritative; retired_slots_not_served" });
+    const Recovery = struct { record: intent.Pending, settled: intent.Settled };
+    fn pendingAtRestart(r: *Runtime) !?Recovery {
+        const record = (try intent.pendingRead(r.gpa, r.io)) orelse return null;
+        return .{ .record = record, .settled = try intent.settleAtRestart(record, &try intent.bootId(), r.cfg.?.generation, &r.cfg.?.digest) };
+    }
+    fn recoveryReceipt(r: *Runtime, pending: ?Recovery) !void {
+        const found = pending orelse return;
+        r.writeSettled(&found.record, found.settled);
+        try intent.pendingClear(r.io);
+    }
+    /// `on` and `off` end the arming a pending record belongs to, so they settle it, never a later restart.
+    /// An unreadable record is settled too: it must not block `off`.
+    fn settlePending(r: *Runtime) !void {
+        const boot = try intent.bootId();
+        const record = intent.pendingRead(r.gpa, r.io) catch {
+            r.writeSettled(null, intent.unreadable);
+            return intent.pendingClear(r.io);
+        };
+        if (record) |found| {
+            r.writeSettled(&found, intent.settleAtArmingChange(found, &boot));
             try intent.pendingClear(r.io);
         }
+    }
+    fn writeSettled(r: *Runtime, record: ?*const intent.Pending, settled: intent.Settled) void {
+        r.service_log.?.write(.{ .event = settled.event, .point = .app_filter, .reason = settled.reason, .old_policy = if (record) |p| &p.old_policy else null, .new_policy = if (record) |p| &p.new_policy else null, .detail = settled.detail });
     }
     fn request(r: *Runtime, client: l.fd_t) !bool {
         const peer = try ipc.Peer.open(client, r.install.owner_uid);
@@ -586,6 +607,9 @@ const Runtime = struct {
                         try intent.write(r.gpa, r.io, false, &saved.policy);
                     }
                 }
+                // The filter is off at this point; a record that cannot be cleared is reported, and the next
+                // `on` settles it before arming.
+                r.settlePending() catch |err| r.service_log.?.write(.{ .event = "warning", .point = .app_filter, .reason = "pending_record_not_cleared", .detail = @errorName(err) });
                 try sys.writeAll(client, "OK off\n");
                 return false;
             },

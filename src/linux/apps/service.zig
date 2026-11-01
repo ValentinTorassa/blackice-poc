@@ -22,6 +22,7 @@ const reload_maps = @import("reload_kernel.zig");
 const channel = @import("reload_channel.zig");
 const wire = @import("reload_protocol.zig");
 const faults = @import("reload_faults.zig");
+const reload_receipts = @import("reload_receipts.zig");
 const port_count = abi.last_port - abi.first_port + 1;
 
 pub fn main(init: std.process.Init) u8 {
@@ -156,10 +157,10 @@ fn run(init: std.process.Init) !void {
         const client = try sys.fd(accepted);
         defer sys.close(client);
         const keep_running = runtime.request(client) catch |err| {
-            runtime.service_log.?.write(.{ .event = "app_filter_control", .point = .app_filter, .verdict = .deny, .reason = @errorName(err) });
-            sys.writeAll(client, "ERROR ") catch {};
-            sys.writeAll(client, @errorName(err)) catch {};
-            sys.writeAll(client, "\n") catch {};
+            const failure = runtime.reload_failure;
+            runtime.service_log.?.write(.{ .event = "app_filter_control", .point = .app_filter, .verdict = .deny, .reason = @errorName(err), .detail = if (failure) |f| f.progress.field() else null });
+            var reply: [192]u8 = undefined;
+            sys.writeAll(client, reload_receipts.reply(&reply, @errorName(err), failure) catch "ERROR\n") catch {};
             if (runtime.failed_start) return error.ArmingFailed;
             continue;
         };
@@ -219,6 +220,8 @@ const Runtime = struct {
     added_running: [abi.max_apps]u32 = @splat(0),
     added_pidfds: [abi.max_apps]l.fd_t = @splat(-1),
     changing: bool = false,
+    /// Set when the current request is a reload that failed after its pending record.
+    reload_failure: ?reload_receipts.Failure = null,
     refuse_stop: std.atomic.Value(bool) = .init(false),
     watch_fd: l.fd_t = -1,
     armed: bool = false,
@@ -563,6 +566,7 @@ const Runtime = struct {
         r.service_log.?.write(.{ .event = settled.event, .point = .app_filter, .reason = settled.reason, .old_policy = if (record) |p| &p.old_policy else null, .new_policy = if (record) |p| &p.new_policy else null, .detail = settled.detail });
     }
     fn request(r: *Runtime, client: l.fd_t) !bool {
+        r.reload_failure = null;
         const peer = try ipc.Peer.open(client, r.install.owner_uid);
         defer peer.close();
         if (r.loaded) |*f| if (try f.tag(@intCast(peer.credentials.pid)) != 0) return error.TaggedCaller;
@@ -633,7 +637,9 @@ const Runtime = struct {
             },
             .reload => {
                 return r.reloadRequest(client, peer, header.length) catch |err| {
-                    @import("reload_receipts.zig").refused(&r.service_log.?, if (r.cfg) |cfg| .{ .policy = &cfg.digest, .generation = cfg.generation } else null, @errorName(err));
+                    if (r.reload_failure) |*failure| {
+                        reload_receipts.failed(&r.service_log.?, failure, if (err == error.ProxyRefused) "proxy_refused" else @errorName(err));
+                    } else reload_receipts.refused(&r.service_log.?, if (r.cfg) |cfg| .{ .policy = &cfg.digest, .generation = cfg.generation } else null, @errorName(err));
                     return err;
                 };
             },
@@ -681,7 +687,7 @@ const Runtime = struct {
         };
         const previous = r.history.head.load(.acquire).?;
         var activation_detail: [16384]u8 = undefined;
-        const detail = try @import("reload_receipts.zig").activationDetail(&activation_detail, &previous.snapshot, &next.snapshot);
+        const detail = try reload_receipts.activationDetail(&activation_detail, &previous.snapshot, &next.snapshot);
         try r.loaded.?.clearChecks();
         for (next.snapshot.slots, 0..) |slot, i| if (slot) |b| {
             if (b.active) try r.loaded.?.checkFile(b.identity, @intCast(i + 1));
@@ -695,6 +701,10 @@ const Runtime = struct {
         // From this point any failed stage/ACK/disk write terminates the service.
         // Pins/tags survive; startup reconciles to durable intent with admission fenced.
         var stop_on_error = true;
+        // A failure from here on is recorded by request() as policy_change_failed with how far the change got,
+        // never as refused.
+        var progress: reload_receipts.Progress = .pending;
+        errdefer r.reload_failure = .{ .progress = progress, .old_generation = previous.cfg.generation, .new_generation = next.cfg.generation, .old_policy = previous.cfg.digest, .new_policy = next.cfg.digest, .restarting = stop_on_error };
         errdefer if (stop_on_error) {
             r.failed_start = true;
             r.closeListeners();
@@ -709,7 +719,6 @@ const Runtime = struct {
             if (err == error.ProxyRefused) {
                 try intent.pendingClear(r.io);
                 stop_on_error = false;
-                r.service_log.?.write(.{ .event = "policy_change_failed", .point = .app_filter, .reason = "proxy_refused", .old_policy = &previous.cfg.digest, .new_policy = &next.cfg.digest });
             }
             return err;
         };
@@ -722,7 +731,9 @@ const Runtime = struct {
         active.fenced = 1;
         try r.loaded.?.setEpoch(active);
         try channel.exchange(r.policy_write, r.policy_read, deadline, .{ .command = .quiesce, .stamp = stamp, .length = 0 }, "", .quiesced);
+        progress = .committing;
         try intent.writeHistory(r.gpa, r.io, &r.history, next);
+        progress = .committed;
         try faults.pause(fault, .after_intent);
         try reload_maps.publishFenced(&maps, staged);
         try channel.exchange(r.policy_write, r.policy_read, deadline, .{ .command = .activate, .stamp = stamp, .length = 0 }, "", .activated);
@@ -731,7 +742,7 @@ const Runtime = struct {
         r.cfg = &next.cfg;
         r.service_log.?.policy_id = &next.cfg.digest;
         r.service_log.?.generation = next.cfg.generation;
-        try @import("reload_receipts.zig").activated(&r.service_log.?, .{ .policy = &previous.cfg.digest, .generation = previous.cfg.generation }, .{ .policy = &next.cfg.digest, .generation = next.cfg.generation }, detail);
+        try reload_receipts.activated(&r.service_log.?, .{ .policy = &previous.cfg.digest, .generation = previous.cfg.generation }, .{ .policy = &next.cfg.digest, .generation = next.cfg.generation }, detail);
         try channel.exchange(r.policy_write, r.policy_read, deadline, .{ .command = .resume_admission, .stamp = stamp, .length = 0 }, "", .resumed);
         active = try r.loaded.?.getEpoch();
         active.fenced = 0;

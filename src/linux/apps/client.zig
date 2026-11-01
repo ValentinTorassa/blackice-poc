@@ -10,10 +10,29 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8, out: *s
         return 0;
     }
     request(gpa, io, args, out) catch |err| {
-        try errw.print("blackice app: {s}\n", .{@errorName(err)});
+        try errw.print("blackice app: {s}\n", .{message(err)});
         return 125;
     };
     return 0;
+}
+fn message(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ReloadFailedBeforeCommit => "reload failed before its change was committed; the previous generation stays in force. Check `blackice app status`.",
+        error.ReloadCommitUnknown => "reload failed while committing its change; the service is restarting and will serve whichever generation was committed. Check `blackice app status`.",
+        error.ReloadFailedAfterCommit => "reload failed after its change was committed; the service is restarting and will serve the new generation. Check `blackice app status`.",
+        else => @errorName(err),
+    };
+}
+pub const Commit = enum { not_committed, unknown, committed };
+/// A failed reload's reply says whether its change was committed. Null for a refusal: nothing changed.
+pub fn commitState(reply: []const u8) ?Commit {
+    var tokens = std.mem.tokenizeAny(u8, reply, " \r\n");
+    while (tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "committed=false")) return .not_committed;
+        if (std.mem.eql(u8, token, "committed=unknown")) return .unknown;
+        if (std.mem.eql(u8, token, "committed=true")) return .committed;
+    }
+    return null;
 }
 pub const Request = struct { op: ipc.Op, policy_path: ?[]const u8 = null };
 pub fn parseArgs(args: []const []const u8) !Request {
@@ -51,9 +70,15 @@ fn request(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8, out: *s
     for (0..reply.len) |i| {
         try deadline.read(fd, reply[i..][0..1]);
         if (reply[i] == '\n') {
-            try out.writeAll(reply[0 .. i + 1]);
-            if (!std.mem.startsWith(u8, reply[0 .. i + 1], "OK ")) return error.AppFilterRefused;
-            return;
+            const line = reply[0 .. i + 1];
+            try out.writeAll(line);
+            if (std.mem.startsWith(u8, line, "OK ")) return;
+            if (op == .reload) if (commitState(line)) |state| return switch (state) {
+                .not_committed => error.ReloadFailedBeforeCommit,
+                .unknown => error.ReloadCommitUnknown,
+                .committed => error.ReloadFailedAfterCommit,
+            };
+            return error.AppFilterRefused;
         }
     }
     return error.InvalidServiceReply;
@@ -65,4 +90,15 @@ test "appfilter reload CLI accepts exactly one policy and never accepts client i
     try std.testing.expectEqualStrings("/tmp/apps.json", parsed.policy_path.?);
     const bad = [_][]const []const u8{ &.{"reload"}, &.{ "reload", "--policy" }, &.{ "reload", "--policy", "" }, &.{ "reload", "--policy", "x", "--uid", "1000" }, &.{ "reload", "--policy", "x", "--generation", "2" }, &.{ "reload", "--policy", "x", "--policy", "y" } };
     for (bad) |args| try std.testing.expectError(error.ExpectedAppOnOrReloadPolicyOffOrStatus, parseArgs(args));
+}
+
+test "appfilter reload CLI tells a committed failure from a refusal" {
+    try std.testing.expectEqual(@as(?Commit, null), commitState("ERROR ChangeInProgress\n"));
+    try std.testing.expectEqual(@as(?Commit, null), commitState("ERROR NotArmed\n"));
+    try std.testing.expectEqual(Commit.not_committed, commitState("ERROR ProxyRefused committed=false gen=3 service=running\n").?);
+    try std.testing.expectEqual(Commit.unknown, commitState("ERROR AccessDenied committed=unknown service=restarting\n").?);
+    try std.testing.expectEqual(Commit.committed, commitState("ERROR ReloadTimeout committed=true gen=4 service=restarting\n").?);
+    try std.testing.expect(std.mem.find(u8, message(error.ReloadFailedAfterCommit), "after its change was committed") != null);
+    try std.testing.expect(std.mem.find(u8, message(error.ReloadFailedBeforeCommit), "previous generation stays") != null);
+    try std.testing.expectEqualStrings("AppFilterRefused", message(error.AppFilterRefused));
 }

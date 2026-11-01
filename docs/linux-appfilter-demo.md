@@ -1,8 +1,7 @@
 # Linux app-filter demo preparation
 
-These policies and commands are preparation, not passing evidence. The service, BPF programs and installation
-still need security clearance and the owner's approval. Do not start an app-filter runtime test while that gate
-is closed. The current binary has only been built and tested in userspace.
+These policies and commands are preparation, not passing evidence. The app filter is **NOT READY for host use**:
+run the service, its BPF programs and the installation only in a disposable VM. No demo run has been recorded.
 
 Offline checks for these fixtures:
 
@@ -76,10 +75,10 @@ barriers, forks or sockets; these probes are for the disposable VM, never the ho
 paths have not been executed during preparation. Error codes alone are insufficient: correlate them with
 kernel receipts and controls at a separate receiver inside the VM's test network. The receiver logs no peer addresses.
 
-### Protocol controls for the separate security run
+### Protocol controls for the VM run
 
 This phase uses the evidence policy's listed launcher, not the two-app recording policy. Do it only in the
-security-authorized kernel run, without changing the policy during a recording. The first probe must come
+disposable VM's kernel run, without changing the policy during a recording. The first probe must come
 from an untagged process, with the same UID, capabilities and namespaces as the tagged probe. Retain that
 context with the logs. An unprivileged `raw4` failure is normally a control limit, not filter evidence.
 
@@ -101,22 +100,22 @@ limited and failed cases. Exit 0 means at least one comparable case passed and n
 turn limited cases into passes. Exit 2 means there were no usable controls. Keep unsupported protocols and
 control failures visible in the report, and capture command exit statuses separately from the JSONL.
 
-### H1 and M2/M3 kernel matrix for re-review
+### Kernel cases for the VM run
 
 The emitted-program unit test already covers every tag, port 760–774, and nine local/unspecified address
-forms for both the root and user guards. It is not a kernel runtime result. The separate
-[VM harness matrix at e91efdc](https://github.com/ValentinTorassa/blackice/blob/e91efdcb57ba7cfeacbff9e81872f38cae023bec/scripts/e2e/appfilter-vm/EXPECTED.md)
-contains the required runtime probes below. Network owns that run; do not run another installer or policy
-sequence in the same guest concurrently. These rows remain requirements until its actual logs are reviewed.
+forms for both the root and user guards. It is not a kernel runtime result. The VM harness for the runtime
+cases below is not in this repository. Do not run another installer or policy sequence in the same guest at
+the same time. Each row stays a requirement until the logs of an actual run have been checked.
 
-| Finding | Kernel cases and required controls |
+| Area | Kernel cases and required controls |
 |---|---|
-| H1(a), A08/A11–A14 | Untagged and tagged connects to every port 760–773, plus reserved 774, using `0.0.0.0`, `::`, `::ffff:0.0.0.0` and ordinary loopback spellings. Other apps' ports must refuse; tagged access may reach only its own listeners. Establish the caller's tag separately so a universal refusal cannot prove identity. |
-| H1(b), A01–A10 | Repeat the listener guard through cron, at, system services and another UID; retain each caller's cgroup. The cgroup-root guards must cover callers outside `user.slice`. |
-| M2, B01–B07 | Tagged listeners on `0.0.0.0`, `::`, and an autobound port accept nothing from a veth peer namespace. Equivalent untagged listeners must accept the control. Accepted tagged sockets retain `lo`. |
-| M2, C01–C03 | Tagged TCP/UDP sockets begin on `lo`; changing or clearing `SO_BINDTODEVICE`/`SO_BINDTOIFINDEX` refuses. `IP_PKTINFO`/`IPV6_PKTINFO` selecting the veth must deliver no tagged payload; the receiver must first observe an untagged control token. |
-| M3, D01–D04 | An untagged IPv6 type-4 routing header reaches the first hop. Tagged SRH connects on 443, 80 and a disallowed port fail and no tagged packet arrives. Preserve the receiver log, not only the client's errno. |
-| M2 regressions, E01–E03 | Stub DNS at `127.0.0.53` and its mapped spelling still answers; tagged HTTP/TLS redirects over v4/v6/mapped still work. Record receipts for allowed and refused requests. |
+| Listener ports | Untagged and tagged connects to every port 760–773, plus reserved 774, using `0.0.0.0`, `::`, `::ffff:0.0.0.0` and ordinary loopback spellings. Other apps' ports must refuse; tagged access may reach only its own listeners. Establish the caller's tag separately so a universal refusal cannot prove identity. |
+| Listener guard outside `user.slice` | Repeat the listener guard through cron, at, system services and another UID; retain each caller's cgroup. The cgroup-root guards must cover callers outside `user.slice`. |
+| Inbound traffic | Tagged listeners on `0.0.0.0`, `::`, and an autobound port accept nothing from a veth peer namespace. Equivalent untagged listeners must accept the control. Accepted tagged sockets retain `lo`. |
+| Device selection | Tagged TCP/UDP sockets begin on `lo`; changing or clearing `SO_BINDTODEVICE`/`SO_BINDTOIFINDEX` refuses. `IP_PKTINFO`/`IPV6_PKTINFO` selecting the veth must deliver no tagged payload; the receiver must first observe an untagged control token. |
+| IPv6 routing headers | An untagged IPv6 type-4 routing header reaches the first hop. Tagged SRH connects on 443, 80 and a disallowed port fail and no tagged packet arrives. Preserve the receiver log, not only the client's errno. |
+| Regressions | Stub DNS at `127.0.0.53` and its mapped spelling still answers; tagged HTTP/TLS redirects over v4/v6/mapped still work. Record receipts for allowed and refused requests. |
 
-Arming-phase recovery has only a userspace model test. The security gate still requires real crash/restart,
-kill-then-fork and kill-at-each-arming-phase checks; this demo preparation does not mark them passed.
+Arming-phase recovery has only a userspace model test. Real crash/restart, kill-then-fork and
+kill-at-each-arming-phase checks are still required before host use; this demo preparation does not mark them
+passed.

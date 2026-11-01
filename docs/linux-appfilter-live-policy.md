@@ -1,13 +1,12 @@
-# Linux application policy reload (experimental VM build)
+# Linux application policy reload (experimental, VM only)
 
 `blackice app reload --policy FILE` replaces an armed application configuration
 without restarting the listed applications.
 
-**Status: NOT READY for host use.** This branch is for isolated VM validation.
-Security review of the admission fence, generation publication and restart
-protocol remains pending; passing VM tests does not clear that gate. It is not
-part of the task-scope 0.1.0 release. `app reload --help` and `app status` explicitly
-report `experimental_vm_only`.
+**Status: NOT READY for host use.** This is experimental code: run it only in a
+disposable VM. Passing tests do not make it ready for a host; see
+[Before host use](#before-host-use). It is not part of the task-scope 0.1.0
+release. `app reload --help` and `app status` report `experimental_vm_only`.
 
 Use a complete `blackice.apps/v0` configuration with `generation` equal to the
 current generation plus one. Initial `app on --policy FILE` accepts generation 1
@@ -61,11 +60,16 @@ rows, with this commit order:
    watches. The state, proxy and service then name the committed generation.
 
 Each socket hook captures the active hash entry once and uses that generation
-for every subsequent lookup. Each proxy connection captures one immutable
-binding at accept; hostname, port, resolved-address checks and its initial receipt
-use that binding. Accepted/in-flight old decisions are not relabeled. The fence
-can temporarily refuse new connections; it never provides an unfiltered path.
-The existing unmatched behavior and the limitations below still apply.
+for every subsequent lookup. The proxy reads its app's binding when it decides a
+request, not when it accepts the connection: a connection opened before a change
+whose request arrives after it is decided by the new generation. Hostname, port,
+resolved-address checks and the initial receipt use that binding. After the dial,
+before forwarding any byte, the proxy decides again with the binding in force then;
+a refusal at that point has detail `rechecked_after_dial`. A request that arrives
+while a change is being published is refused with `policy_change_in_progress`.
+Decisions already made are not relabeled. The fence can temporarily refuse new
+connections; it never provides an unfiltered path. The existing unmatched
+behavior and the limitations below still apply.
 
 The request header is 52 bytes, with a generation, SHA-256, command and bounded
 body length. Configuration bodies are at most 1 MiB and nesting depth 32. The
@@ -82,13 +86,23 @@ loads its retained policy history, repairs missing committed rows, publishes the
 intent's epoch and removes only unpublished future staging rows. It never clears
 tags or previously published generations. A kernel epoch ahead of durable intent
 is inconsistent with this protocol and refuses startup. The child starts with the
-committed generation before admissions reopen. A pending change produces either
-`policy_change_failed` / `interrupted` with both hashes, or
-`policy_change_completed_after_restart` with both hashes. An intent/state crash
-boundary therefore does not require those two digests to match at startup.
+committed generation before admissions reopen. An intent/state crash boundary
+therefore does not require those two digests to match at startup.
 
-This is BPF map ABI 2. An existing ABI-1 installation must be turned off with its
-original reviewed binary before upgrading. The new loader refuses incompatible
+The pending record names the boot that wrote it. At a restart in the same boot it
+produces `policy_change_completed_after_restart` / `completed_after_restart` or
+`policy_change_failed` / `interrupted`, with both hashes. A same-boot record that
+matches neither the committed generation nor its predecessor stops startup while
+admission is still fenced. A record from another boot belongs to an arming that
+ended with that boot: it is settled as `policy_change_failed` /
+`interrupted_by_reboot` and cleared, never compared with the current arming.
+`app on` and `app off` settle any record left by an earlier arming the same way
+(`interrupted_by_reboot`, or `interrupted_arming_ended` in the same boot), so a
+later restart cannot trip over it. An unreadable record is settled as
+`invalid_pending_record`, so it cannot block `off`.
+
+This is BPF map ABI 2. An existing ABI-1 installation must be turned off with the
+binary that armed it before upgrading. The new loader refuses incompatible
 pins; it does not silently replace an active installation.
 
 ## Membership and existing connections
@@ -125,19 +139,40 @@ Scheduling and receipt I/O can add latency; this is not a real-time deadline.
 Data already received by the client cannot be recalled. Name-based routing still
 does not inspect encrypted HTTP content or eliminate domain fronting.
 
-The decided A3 behavior is **reset only newly refused connections**. Keeping a
-connection after the new policy refuses it is not an alternative in this design.
-This also applies to a mode change, such as allowlist to deny-all. Each reset
-receipt names the admitted host and the new generation; a still-allowed stream
-gets no reset receipt. Kernel connect decisions need no retroactive change:
-they run per `connect()`. The decision does not clear this branch for host use;
-security review remains pending.
+Narrowing **resets only newly refused connections**, and never keeps a
+connection that the new policy refuses. This also applies to a mode change, such
+as allowlist to deny-all. Each reset receipt names the admitted host and the new
+generation; a still-allowed stream gets no reset receipt. Kernel connect
+decisions need no retroactive change: they run per `connect()`.
 
 ## Receipts and bounds
 
-Service `policy_activated` carries the new `gen`, configuration `policy`, and full
-`old_policy` / `new_policy` hashes. The bounded activation detail lists added,
-removed, retired and changed paths.
+Service receipts for a reload:
+
+- `policy_activated`: the new `gen` and configuration `policy`, the full
+  `old_policy` / `new_policy` hashes, and a bounded detail listing added,
+  removed, retired and changed paths.
+- `policy_change_refused`: the request was refused before its pending record was
+  written, so nothing changed. `reason` is the error name, for example
+  `ExpectedNextGeneration`, `ChangeInProgress` or `TaggedCaller`.
+- `policy_change_failed` after the pending record: both hashes, and `reason` is the
+  error name, or `proxy_refused` when the child refused the candidate policy.
+  `detail` is `committed=false`, `committed=unknown` (the intent write itself
+  failed; the restart reads whichever generation it holds) or `committed=true`,
+  then `service=restarting` or `service=running`. `gen` and `policy` name the new
+  generation only with `committed=true`. A change is never logged as refused after
+  its pending record.
+- `policy_change_failed` with reason `interrupted`, `interrupted_by_reboot`,
+  `interrupted_arming_ended` or `invalid_pending_record`, and
+  `policy_change_completed_after_restart`, settle a pending record (see
+  [Commit and recovery](#commit-and-recovery)).
+
+The control reply for a failed reload is
+`ERROR <name> committed=<false|unknown|true> [gen=<n>] service=<restarting|running>`,
+where `gen` is the generation the service serves next when that is known; the
+request's `app_filter_control` receipt carries the same `committed=` value. The CLI
+prints that line and then says whether the change was committed. A refusal keeps
+the plain `ERROR <name>` reply.
 Long summaries are truncated by the existing field cap; per-slot records retain
 the corresponding executable independently. Each assigned app's proxy file receives
 `policy_changed` with its old/new network-policy hashes and new generation.
@@ -160,6 +195,15 @@ one active epoch, seven candidate identities, eight scan results and the existin
 fixed TGID tag array. Generation rows and retired slots are not recycled while
 armed. Capacity exhaustion refuses/stops rather than widening enforcement.
 
+## Known limits
+
+- Any process running as the owner, a listed app included, can connect to the
+  control socket over and over, and each refused request writes a line to the
+  service log. Once that 8 MiB file is full, later policy-change and recovery
+  receipts are dropped; `app status` still counts them in `write_dropped`.
+- The polkit prompt for a reload does not show which generation or policy hash it
+  approves. Cancel any prompt you did not just start.
+
 ## Validation
 
 Run ordinary tests without privileges:
@@ -177,7 +221,7 @@ owner tty, four policies retaining its listed launcher, a dedicated off-VM
 receiver, and a fresh output directory. An outside-scope control marker must reach
 the receiver; the scoped marker must not. It never supplies passwords or installs
 a polkit bypass. This fixed-membership driver is one acceptance test, not the
-whole security gate.
+whole set of checks needed before host use.
 
 Add `--web-loop` to run a second process through that same listed launcher. It
 schedules 20 HTTPS requests per second alternating `example.com` and `github.com`,
@@ -204,7 +248,7 @@ is removed before retrying off; this option therefore changes VM state.
 untagged addition (refused), the later successfully added app's allow/deny flows,
 a removed running process retaining its previous policy/generation, a fresh
 unlisted launch reaching the controlled receiver, and a later app using a new
-slot. It kills only the identified VM3 loader through a pidfd to check that a
+slot. It kills only the identified VM loader through a pidfd to check that a
 retired process stays tagged but loses proxy service after restart. The script
 uses real polkit for each reload/off and ends with an authorized off. Receiver
 corroboration is required in addition to its local checks.
@@ -227,12 +271,12 @@ removed host at generation 3, continued bytes for the kept host with no reset,
 and an unchanged process tag. Explicit HTTP CONNECT is refused by the app
 filter's transparent HTTP listener, so this case uses WebSocket over TLS.
 
-The reviewed unit restarts failures with a one-to-60-second backoff over five
+The unit restarts failures with a one-to-60-second backoff over five
 steps. `StartLimitIntervalSec=600` / `StartLimitBurst=60` is a backstop; successful
 off-state control requests also count as starts. Recovery tests allow 75 seconds
 for that separate restart budget. The child exchange still has its total
 five-second deadline. A test operator may reset the start budget between isolated
-VM3 cases; the drivers do not reset it inside a case or hide a restart loop.
+VM cases; the drivers do not reset it inside a case or hide a restart loop.
 Preserve any rate-limit failure and its journal before rerunning. Do not loosen
 the installed unit's limits.
 
@@ -266,13 +310,21 @@ launches an untagged instance during the pause, checks the warning/status flag,
 verifies a post-publication launch is tagged, and checks that the warning clears
 when the original process exits. Journal cursors prevent stale pause markers
 from satisfying a later run.
-It requires the appropriate interrupted/completed/refused receipt and unchanged
-or advanced intent generation. A successful subsequent retry and removal/retirement
+It requires the matching `interrupted`, `completed_after_restart` or
+`proxy_refused` receipt and an unchanged or advanced intent generation. A
+successful subsequent retry and removal/retirement
 coverage remain separate requirements; compiled scripts alone are not evidence.
 
-Before host use, evidence must also cover add/remove membership and its race,
-slow allowed/revoked transfers, stale/malformed/oversized input, cancelled and
-unauthenticated/tagged/non-owner requests, concurrent/off/unarmed rejection,
-child failure/timeouts, both sides of the intent commit crash boundary, a
-successful retry, and two reproducible builds. VM evidence and security clearance
-are required; passing pure tests alone is insufficient.
+## Before host use
+
+VM runs of earlier commits do not count for the current one. On the exact commit
+to be used, the VM evidence must cover add/remove membership and its race, slow
+allowed/revoked transfers, narrowing with open streams and WebSockets, a
+connection opened before a narrowing whose request is sent after it,
+stale/malformed/oversized input, cancelled and unauthenticated/tagged/non-owner
+requests, concurrent/off/unarmed rejection, child failure/timeouts, both sides of
+the intent commit crash boundary, a reboot during a paused reload followed by
+`off`/`on` and a forced restart, a successful retry, and two reproducible builds.
+No driver here covers the opened-before-narrowing or reboot cases yet. After that,
+a first host run needs a written step-by-step procedure with a stop rule at each
+step. Passing pure tests alone is insufficient.

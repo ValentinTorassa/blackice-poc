@@ -1,9 +1,9 @@
-# Linux application filter — review candidate
+# Linux application filter (experimental)
 
-This branch implements the Linux apps ADR revision 3.1 plus the changes requested in security's review of
-978a65c and 6c849ec. **These review fixes have not been loaded, attached, installed, or tested against real
-application traffic.** Earlier VM runs of another commit do not validate this revision. Userspace unit tests
-and cross compilation prepare for review; the existing task-scope helper is unchanged.
+**Status: NOT READY for host use.** This is experimental code: run it only in a disposable VM. It has not been
+installed on a host or tested there with real application traffic, and VM runs of earlier commits do not
+validate the current code. CI runs its userspace unit tests and cross-compiles it; nothing there loads BPF.
+The task-scope helper does not use this code, and the filter is not part of the 0.1.0 release.
 
 This filter routes ordinary applications' HTTP(S) through policy; the allowed DNS stub and delegation paths
 mean it is not containment for an application deliberately trying to escape.
@@ -21,13 +21,14 @@ scripts/linux-build-appfilter.sh
 ```
 
 The second command prints hashes for the stripped static `blackice-linux-appfilter` binary and its deterministic
-installation bundle. Neither command installs on the host. Do not run setup, `app on`, or the service until
-security clears the exact commit, bundle, scripts and kernel-load plan, and Valen approves the service footprint.
+installation bundle. Neither command installs anything. Do not run setup, `app on` or the service outside a
+disposable VM. Host use first needs a security review of the exact commit, bundle, scripts and kernel-load plan.
 
-After the installation and first-load gate, the CLI flow is `blackice app on --policy APPS.json`,
-`blackice app status`, and owner-authorized `blackice app off`. A sample policy is
+Once installed in a VM, the CLI flow is `blackice app on --policy APPS.json`, `blackice app status`, and
+owner-authorized `blackice app off`. `blackice app reload --policy APPS.json` replaces the armed policy in place;
+it is experimental as well, see [live policy reload](linux-appfilter-live-policy.md). A sample policy is
 [`examples/linux-apps.json`](../examples/linux-apps.json); close listed applications before arming.
-These commands have not been run for this revision.
+These commands have not been run on a host.
 
 ## Identity and decisions
 
@@ -48,15 +49,13 @@ MPTCP are refused. UDP DNS to `127.0.0.53:53`, including its mapped IPv6 spellin
 Unlisted processes retain their network access, except that loopback listener ports require the matching app tag.
 Tagged INET sockets are bound to the loopback interface at creation. Accepted sockets inherit this binding;
 the intended effect is to block inbound LAN traffic and routing-header/device-selection detours. These effects
-still require the approved kernel tests, including UDP stub DNS and both proxy redirects.
+still need kernel tests in a VM, including UDP stub DNS and both proxy redirects.
 
 Each app has HTTP and TLS ports in 760–773, with port 774 reserved. Both `127.0.0.1` and `::1` are bound; there
 are no wildcard listeners. Arming reserves the entire 760–774 range and refuses any collision. The service checks
 that `ip_unprivileged_port_start` is greater than 774 before binding. The connect hooks treat 127/8, 0/8, ::1,
 ::, and mapped IPv4 equivalents as local for `listener_peer` checks. The unspecified-address cases matter
 because Linux can route them to loopback after the connect hook.
-The unspecified-address coverage and root guard were added after `978a65c`/`086aeac`.
-Those earlier demo builds do not support the coverage claim above, including for cron/at callers.
 
 The proxy checks exactly one TLS ClientHello SNI, or one HTTP Host header in an origin-form request. It resolves
 and dials that name using the existing policy and resolved-address checks, not the original destination IP.
@@ -104,7 +103,7 @@ Before creating proxy threads, the child applies Landlock ABI 6 to deny future f
 signals/abstract Unix sockets. Its seccomp policy refuses BPF, ptrace, foreign-FD access, namespace operations,
 exec, non-thread forks, filesystem metadata changes and Unix socket creation. Preopened receipts remain
 writable. The loader monitors its pidfd; child failure exits the service with pinned filtering retained.
-Parent death kills the child. These boundaries still need the approved VM checks. The bounding set retains
+Parent death kills the child. These boundaries still need VM checks. The bounding set retains
 the unit's four caps; cleared permitted/inheritable/ambient sets plus NoNewPrivileges prevent reacquisition.
 
 All four listeners for an app share a 16-connection budget. A request has five seconds for its HTTP head or
@@ -127,9 +126,9 @@ cancel or the daemon's 15-second authorization timeout leave the filter armed. T
 wrong-password, Ctrl-C and timeout cases remain VM tests. Answer the prompt promptly; on timeout,
 run `app off` again.
 
-This first candidate changes an active policy through an authorized `off`, then a fresh `on`; it refuses a
-different policy while armed. It does not silently reassign IDs held by existing descendants. In-place policy
-updates are a follow-up.
+`app on` refuses a different policy while armed. To change it, use `app reload` (experimental, VM only; see
+[live policy reload](linux-appfilter-live-policy.md)), or an authorized `off` followed by a fresh `on`. Neither
+reassigns the app IDs that running descendants already hold.
 
 An acknowledged arm persists its policy digest and boot ID in an atomically replaced, fsynced intent file.
 Pins still disappear on reboot: **this build does not automatically re-arm before user sessions**. Until
@@ -141,7 +140,7 @@ The loopback listeners set `SO_REUSEADDR` before binding so a restart can reuse 
 connections remain in `TIME_WAIT`. They do not enable `SO_REUSEPORT`: an existing live listener must still
 make arming or recovery refuse. The dedicated IPv4/IPv6 socket test checks the options, observes server-side
 `TIME_WAIT`, rebinds immediately and rejects a competing live listener. It is compiled separately from the
-pure unit suite and runs only in a disposable QEMU VM; the full crash/restart check still belongs to the VM gate.
+pure unit suite and runs only in a disposable QEMU VM; the full crash/restart check still needs a VM run.
 
 The service restarts after a failure with a backoff, from 1 s up to 60 s over five steps, and keeps the pins while
 it is down. The start limit (60 starts in 10 minutes) is only a backstop: while the filter is off, every control
@@ -153,8 +152,8 @@ if that limit is reached.
 - Fresh arming requires the five user.slice hooks and the two root connect hooks to be vacant. Restart also
   requires exactly the pinned program IDs, with no foreign additions. It refuses an unknown program ID:
   Linux 6.12 requires SYS_ADMIN to open arbitrary program IDs for name inspection, and the service intentionally
-  lacks that capability. ALLOW_MULTI is used, but this candidate does not yet accept pre-existing systemd programs
-  at the same points. The owner's root preflight determines whether this limit affects this host.
+  lacks that capability. ALLOW_MULTI is used, but this build does not yet accept pre-existing systemd programs
+  at the same points. A root preflight on the target machine shows whether this limit applies there.
 - Policy executable paths must be canonical, root-owned regular executable files with root-owned, non-writable
   ancestors, on ext4 or xfs. Other filesystems, including btrfs and overlayfs, refuse arming because their
   statx device identity may differ from the kernel inode's superblock device. Errors name the executable.
@@ -170,7 +169,7 @@ if that limit is reached.
   including while the service is down, is not tagged. A descendant already started before arming and now running
   another file is not discoverable by the task iterator. Processes an app started before arming are not covered.
   New directory watches are installed before refreshing identities, so a concurrent replacement stays queued.
-  Retained old inode numbers can be reused by the filesystem and falsely tag an unrelated executable (L12);
+  Retained old inode numbers can be reused by the filesystem and falsely tag an unrelated executable;
   this build does not yet include inode generation in its key.
 - DNS through the stub is a full two-way data channel. Unix sockets, delegated work through D-Bus/systemd/portals
   or cron/at, rootless containers relayed by pasta/slirp4netns (including raw AF_PACKET traffic),
@@ -183,19 +182,20 @@ if that limit is reached.
   policy. The root guard restricts reserved listener access from system services too; it does not make the
   broader application policy cover network sockets created outside `user.slice`.
 - IO_uring identity attribution, kernel verifier acceptance, post-capability-drop map updates, crash recovery,
-  polkit interaction, protected-port rebinding and application traffic all still need the approved installed run.
+  polkit interaction, protected-port rebinding and application traffic all still need an installed VM run.
   Restart receipts report lost events; exact downtime is not measured and is labeled unknown.
 - The retained executable-identity map has 4096 entries. Exhaustion refuses an update and stops the service;
   existing pinned identities remain restricted. A newly replaced file in that failure window is not covered.
 
-## Security gate and sources
+## Before installation, and sources
 
-Security reviews the complete setup/teardown/bootstrap/unit/polkit diff and two reproducible builds. The owner
-must approve the new service/system user and any missing `bpftool` package. Setup never installs packages or
-changes sysctls, nftables or sudoers. Its root-owned staged bundle and binary must match the reviewed hashes
-before any file is installed. Teardown stops socket activation, detaches only pinned handles, unpins/unmounts
-and removes the service; receipts/policies are retained under a root-only directory. Reinstallation refuses
-that archive until the owner moves it aside; setup never adopts or erases preserved evidence.
+Before any host installation, the setup, teardown, bootstrap, unit and polkit files and two reproducible builds
+need a security review. Installing adds a dedicated system user and service, and may need the `bpftool` package.
+Setup never installs packages or changes sysctls, nftables or sudoers. Its root-owned staged bundle and binary
+must match the hashes passed to setup before any file is installed. Teardown stops socket activation, detaches
+only pinned handles, unpins/unmounts and removes the service; receipts/policies are retained under a root-only
+directory. Reinstallation refuses that archive until the owner moves it aside; setup never adopts or erases
+preserved evidence.
 Teardown names unexpected configuration entries before changing anything and keeps owner.json until runtime
 cleanup and account deletion complete. Retained evidence entries become root:root without following symlinks;
 the archive directory's setgid bit is explicitly cleared.

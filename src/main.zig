@@ -21,8 +21,8 @@ const usage =
     \\  blackice run --policy FILE [--env NAME]... [--relay --model ID...] -- CMD [ARG]...
     \\  blackice grant SCOPE HOST [--for 10m]
     \\  blackice revoke SCOPE HOST
-    \\  blackice app on --policy APPS.json | off | status (Linux)
-    \\  blackice app reload --policy APPS.json (Linux; prepared only, unavailable)
+    \\  blackice app on --policy APPS.json | off | status (Linux; experimental, VM only)
+    \\  blackice app reload --policy APPS.json (Linux; experimental, VM only, not ready for host use)
     \\
 ;
 

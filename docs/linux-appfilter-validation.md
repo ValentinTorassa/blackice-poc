@@ -1,8 +1,10 @@
 # Linux app-filter pseudo-file audit and teardown regression checks
 
-The release-reading fix from `3fbd215` is already cherry-picked as `3c69c59`; both have the
-same stable patch ID. Kernel release comes from `std.posix.uname()`. The service unit also
-sets `LockPersonality=yes`; the independent BTF SHA-256 check remains the kernel identity gate.
+The [Linux app filter](linux-appfilter.md) is **NOT READY for host use**. These are offline checks; they do not
+show that it runs.
+
+The service reads the kernel release with `std.posix.uname()`, not from procfs. The service unit
+also sets `LockPersonality=yes`; the independent BTF SHA-256 check remains the kernel identity check.
 
 ## Procfs and sysfs reads
 
@@ -28,8 +30,8 @@ evidence that the service has run.
 
 ## Teardown interruptions
 
-The teardown fix in `5517189` checks for unknown configuration entries before cleanup and retains
-`owner.json` until runtime cleanup and account/group deletion finish. A policy left beside the marker
+Teardown checks for unknown configuration entries before cleanup and retains `owner.json` until
+runtime cleanup and account/group deletion finish. A policy left beside the marker
 therefore refuses before teardown changes anything. Keep demo policies outside that configuration
 directory; teardown preserves unexpected files for the owner to inspect.
 
@@ -56,11 +58,11 @@ The suite checks:
 - An unrecorded service account is never deleted.
 
 This tests script control flow and interruption recovery with mocks. Real detach, systemd and
-privileged ownership behavior still belong to the approved disposable-VM gate.
+privileged ownership behavior still need a run in a disposable VM.
 
 ## UDP-connect receipts
 
-The `5517189` changes already distinguish UDP `connect()` refusals as `udp_connect`, aggregated by
+The kernel receipts distinguish UDP `connect()` refusals as `udp_connect`, aggregated by
 application and family with counts and first/last kernel timestamps. UDP sendmsg refusals retain `udp`.
 Both remain refused except for the allowed DNS stub. This distinguishes glibc address-sorting probes
 from an HTTP/TLS policy decision without allowing connected UDP to bypass sendmsg hooks. The full

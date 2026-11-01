@@ -106,6 +106,12 @@ jobs:
       - name: Test
         run: zig build test --summary all
 
+      # The Linux app filter is a separate binary with its own steps. Its unit tests stay in userspace: the
+      # emitted BPF instructions run in an interpreter, and nothing is loaded or attached.
+      - name: Build and test the Linux app filter
+        if: runner.os == 'Linux'
+        run: zig build linux-appfilter linux-appfilter-test --summary all
+
       - name: Cross-build for the other OS
         env:
           CROSS_TARGET: ${{ matrix.cross_target }}

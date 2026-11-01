@@ -1,0 +1,11 @@
+[Unit]
+Description=Private persistent bpffs for blackice application filter
+Before=blackice-appfilter.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/blackice-appfilter-bpffs
+# This root-only bootstrap must run in the host mount namespace. Putting it in
+# ExecStartPre of ProtectSystem=strict would mount in a disposable private namespace.
+# It only mounts/chowns this fixed bpffs; it never loads BPF. No ExecStop unmount.

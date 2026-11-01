@@ -270,8 +270,8 @@ const Harness = struct {
         errdefer h.log.close();
         h.grants = .init(testing.allocator);
         var c = cfg;
-        c.resolver = .{ .resolve = fixedResolve };
-        c.grants = &h.grants;
+        if (c.resolver == null) c.resolver = .{ .resolve = fixedResolve };
+        c.grants = if (c.live == null) &h.grants else null;
         h.p = try proxy.Proxy.start(testing.allocator, h.io, &h.pol, &h.log, c);
     }
 
@@ -297,6 +297,12 @@ const Harness = struct {
             if (i == n) return std.json.parseFromSlice(std.json.Value, testing.allocator, line, .{});
         }
         return error.MissingReceipt;
+    }
+
+    fn receiptCount(h: *Harness) !usize {
+        const bytes = try h.receipts();
+        defer testing.allocator.free(bytes);
+        return std.mem.count(u8, bytes, "\n");
     }
 
     /// Waits up to 3 s for at least `n` receipt lines.
@@ -388,6 +394,249 @@ fn testPolicy(buf: []u8, upstream_port: u16) []const u8 {
 }
 
 // ---------------------------------------------------------------- integration tests
+
+const LiveCell = struct {
+    current: std.atomic.Value(*const proxy.live_policy.Binding),
+    paused: std.atomic.Value(bool) = .init(false),
+    fn read(ctx: *const anyopaque, _: usize) ?proxy.live_policy.Binding {
+        const cell: *const LiveCell = @ptrCast(@alignCast(ctx));
+        return cell.current.load(.acquire).*;
+    }
+    fn source(cell: *LiveCell) proxy.live_policy.Source {
+        return .{ .context = cell, .slot = 0, .read = read, .paused = &cell.paused };
+    }
+};
+
+fn liveTestPolicy(buf: []u8, port: u16, hosts: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{{\"version\":\"blackice.policy/v0\",\"network\":{{\"mode\":\"allowlist\",\"allow\":[{s}],\"ports\":[{d}],\"subnets\":{{\"allow\":[\"127.0.0.0/8\"]}}}}}}", .{ hosts, port }) catch unreachable;
+}
+
+test "live policy widening keeps tunnels and narrowing resets only the newly refused host" {
+    var up: TestServer = undefined;
+    try up.start(testing.io, .echo);
+    defer up.stop();
+    var buf: [600]u8 = undefined;
+    var initial = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), null);
+    defer initial.deinit();
+    var widened = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\",\"other.test\""), null);
+    defer widened.deinit();
+    var narrowed = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\""), null);
+    defer narrowed.deinit();
+    const views = [_]proxy.live_policy.Binding{
+        .{ .policy = &initial, .decision = .{ .policy = &initial.digest_hex, .generation = 1 }, .executable = "/usr/bin/probe" },
+        .{ .policy = &widened, .decision = .{ .policy = &widened.digest_hex, .generation = 2 }, .executable = "/usr/bin/probe" },
+        .{ .policy = &narrowed, .decision = .{ .policy = &narrowed.digest_hex, .generation = 3 }, .executable = "/usr/bin/probe" },
+    };
+    var cell: LiveCell = .{ .current = .init(&views[0]) };
+    var h: Harness = undefined;
+    try h.initConfig(liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), .{ .live = cell.source() });
+    defer h.deinit();
+    var clients: [2]Client = undefined;
+    for (&clients, [_][]const u8{ "allowed.test", "granted.test" }) |*c, host| {
+        c.init(h.io, try h.connect());
+        var request: [128]u8 = undefined;
+        try c.send(try std.fmt.bufPrint(&request, "CONNECT {s}:{d} HTTP/1.1\r\n\r\n", .{ host, up.port }));
+        var status: [128]u8 = undefined;
+        try testing.expectEqualStrings("HTTP/1.1 200 Connection Established", try c.status(&status));
+        var hello_buf: [600]u8 = undefined;
+        const hello = clientHello(&hello_buf, host);
+        try c.send(hello);
+        try testing.expectEqualSlices(u8, hello, try c.r.interface.take(hello.len));
+    }
+    defer for (clients) |c| c.stream.close(h.io);
+    cell.current.store(&views[1], .release);
+    try h.io.sleep(.fromMilliseconds(250), .awake);
+    for (&clients) |*c| {
+        try c.send("wide");
+        try testing.expectEqualStrings("wide", try c.r.interface.take(4));
+    }
+    cell.current.store(&views[2], .release);
+    const start = Io.Clock.awake.now(h.io);
+    try testing.expectEqual(@as(usize, 0), (try clients[1].untilClosed()).bytes);
+    try testing.expect(start.untilNow(h.io, .awake).toMilliseconds() < 1500);
+    try clients[0].send("still-allowed");
+    try testing.expectEqualStrings("still-allowed", try clients[0].r.interface.take(13));
+    try h.waitReceipts(3);
+    for (0..2) |i| {
+        var row = try h.receiptAt(i);
+        defer row.deinit();
+        try testing.expectEqual(@as(i64, 1), row.value.object.get("gen").?.integer);
+    }
+    var reset = try h.receiptAt(2);
+    defer reset.deinit();
+    try expectField(reset.value, "event", "policy_changed");
+    try expectField(reset.value, "reason", "policy_narrowed");
+    try expectField(reset.value, "host", "granted.test");
+    try expectField(reset.value, "policy", &narrowed.digest_hex);
+    try testing.expectEqual(@as(i64, 3), reset.value.object.get("gen").?.integer);
+}
+
+test "live policy decides a connection opened before a change with the policy in force when its request arrives" {
+    var up: TestServer = undefined;
+    try up.start(testing.io, .echo);
+    defer up.stop();
+    var buf: [600]u8 = undefined;
+    var initial = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), null);
+    defer initial.deinit();
+    var narrowed = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\""), null);
+    defer narrowed.deinit();
+    const views = [_]proxy.live_policy.Binding{
+        .{ .policy = &initial, .decision = .{ .policy = &initial.digest_hex, .generation = 1 }, .executable = "/usr/bin/probe" },
+        .{ .policy = &narrowed, .decision = .{ .policy = &narrowed.digest_hex, .generation = 2 }, .executable = "/usr/bin/probe" },
+    };
+    var cell: LiveCell = .{ .current = .init(&views[0]) };
+    var h: Harness = undefined;
+    try h.initConfig(liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), .{ .live = cell.source() });
+    defer h.deinit();
+    var request: [128]u8 = undefined;
+    var status: [128]u8 = undefined;
+
+    // Accepted under generation 1. The request arrives after generation 2 drops granted.test.
+    var before: Client = undefined;
+    before.init(h.io, try h.connect());
+    defer before.stream.close(h.io);
+    try h.io.sleep(.fromMilliseconds(150), .awake);
+    cell.current.store(&views[1], .release);
+    try before.send(try std.fmt.bufPrint(&request, "CONNECT granted.test:{d} HTTP/1.1\r\n\r\n", .{up.port}));
+    try testing.expectEqualStrings("HTTP/1.1 403 Forbidden", try before.status(&status));
+
+    // Accepted before a change starts, request sent while the change is being published: refused.
+    var during: Client = undefined;
+    during.init(h.io, try h.connect());
+    defer during.stream.close(h.io);
+    try h.io.sleep(.fromMilliseconds(150), .awake);
+    cell.paused.store(true, .release);
+    try during.send(try std.fmt.bufPrint(&request, "CONNECT allowed.test:{d} HTTP/1.1\r\n\r\n", .{up.port}));
+    try testing.expectEqualStrings("HTTP/1.1 503 Service Unavailable", try during.status(&status));
+    cell.paused.store(false, .release);
+
+    // Neither request reached the upstream, and each has exactly one receipt, at generation 2: no allow line
+    // from generation 1 and no reset line, because nothing was dialed.
+    try h.io.sleep(.fromMilliseconds(300), .awake);
+    try testing.expectEqual(@as(u32, 0), up.accepted.load(.monotonic));
+    try testing.expectEqual(@as(usize, 2), try h.receiptCount());
+    var refused = try h.receiptAt(0);
+    defer refused.deinit();
+    try expectField(refused.value, "event", "connect");
+    try expectField(refused.value, "verdict", "deny");
+    try expectField(refused.value, "reason", "no_matching_rule");
+    try expectField(refused.value, "host", "granted.test");
+    try expectField(refused.value, "policy", &narrowed.digest_hex);
+    try testing.expectEqual(@as(i64, 2), refused.value.object.get("gen").?.integer);
+    var paused = try h.receiptAt(1);
+    defer paused.deinit();
+    try expectField(paused.value, "verdict", "deny");
+    try expectField(paused.value, "reason", "policy_change_in_progress");
+    try expectField(paused.value, "host", "allowed.test");
+    try testing.expectEqual(@as(i64, 2), paused.value.object.get("gen").?.integer);
+}
+
+/// Publishes another binding while the proxy resolves a name, as a policy change landing mid-dial would.
+const ChangeOnResolve = struct {
+    cell: *LiveCell,
+    to: *const proxy.live_policy.Binding,
+    fn resolve(context: ?*anyopaque, io: Io, host: []const u8, port: u16, out: []net.IpAddress) anyerror!usize {
+        const self: *ChangeOnResolve = @ptrCast(@alignCast(context.?));
+        const n = try fixedResolve(null, io, host, port, out);
+        self.cell.current.store(self.to, .release);
+        return n;
+    }
+};
+
+test "live policy narrowing published during the dial refuses before any byte reaches the upstream" {
+    var up: TestServer = undefined;
+    try up.start(testing.io, .echo);
+    defer up.stop();
+    var buf: [600]u8 = undefined;
+    var initial = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), null);
+    defer initial.deinit();
+    var narrowed = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\""), null);
+    defer narrowed.deinit();
+    const views = [_]proxy.live_policy.Binding{
+        .{ .policy = &initial, .decision = .{ .policy = &initial.digest_hex, .generation = 1 }, .executable = "/usr/bin/probe" },
+        .{ .policy = &narrowed, .decision = .{ .policy = &narrowed.digest_hex, .generation = 2 }, .executable = "/usr/bin/probe" },
+    };
+    var cell: LiveCell = .{ .current = .init(&views[0]) };
+    var change: ChangeOnResolve = .{ .cell = &cell, .to = &views[1] };
+    var h: Harness = undefined;
+    try h.initConfig(liveTestPolicy(&buf, up.port, "\"allowed.test\",\"granted.test\""), .{
+        .live = cell.source(),
+        .resolver = .{ .context = &change, .resolve = ChangeOnResolve.resolve },
+    });
+    defer h.deinit();
+    var request: [160]u8 = undefined;
+    var status: [128]u8 = undefined;
+    const forms = [_][]const u8{
+        "GET http://granted.test:{d}/ HTTP/1.1\r\nhost: granted.test\r\n\r\n",
+        "CONNECT granted.test:{d} HTTP/1.1\r\n\r\n",
+    };
+    inline for (forms, 0..) |form, i| {
+        cell.current.store(&views[0], .release);
+        var c: Client = undefined;
+        c.init(h.io, try h.connect());
+        defer c.stream.close(h.io);
+        try c.send(try std.fmt.bufPrint(&request, form, .{up.port}));
+        try testing.expectEqualStrings("HTTP/1.1 403 Forbidden", try c.status(&status));
+        var tries: usize = 0;
+        while (up.accepted.load(.monotonic) < i + 1 and tries < 100) : (tries += 1) try h.io.sleep(.fromMilliseconds(10), .awake);
+        try testing.expectEqual(@as(u32, i + 1), up.accepted.load(.monotonic));
+    }
+    try h.io.sleep(.fromMilliseconds(300), .awake);
+    try testing.expectEqual(@as(usize, 0), up.received.load(.monotonic));
+    try testing.expectEqual(@as(usize, 2), try h.receiptCount());
+    for ([_][]const u8{ "http", "connect" }, 0..) |event, i| {
+        var row = try h.receiptAt(i);
+        defer row.deinit();
+        try expectField(row.value, "event", event);
+        try expectField(row.value, "verdict", "deny");
+        try expectField(row.value, "reason", "no_matching_rule");
+        try expectField(row.value, "host", "granted.test");
+        try testing.expect(std.mem.find(u8, row.value.object.get("detail").?.string, "rechecked_after_dial") != null);
+        try testing.expectEqual(@as(i64, 2), row.value.object.get("gen").?.integer);
+    }
+}
+
+test "live policy narrowing drops queued bytes with the grant watchdog reset mechanism" {
+    var up: TestServer = undefined;
+    try up.start(testing.io, .flood);
+    defer up.stop();
+    var buf: [600]u8 = undefined;
+    var initial = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"allowed.test\""), null);
+    defer initial.deinit();
+    var narrowed = try policy.Policy.parse(testing.allocator, liveTestPolicy(&buf, up.port, "\"other.test\""), null);
+    defer narrowed.deinit();
+    const views = [_]proxy.live_policy.Binding{
+        .{ .policy = &initial, .decision = .{ .policy = &initial.digest_hex, .generation = 1 }, .executable = "/usr/bin/probe" },
+        .{ .policy = &narrowed, .decision = .{ .policy = &narrowed.digest_hex, .generation = 2 }, .executable = "/usr/bin/probe" },
+    };
+    var cell: LiveCell = .{ .current = .init(&views[0]) };
+    var h: Harness = undefined;
+    try h.initConfig(liveTestPolicy(&buf, up.port, "\"allowed.test\""), .{ .live = cell.source() });
+    defer h.deinit();
+    var c: Client = undefined;
+    c.init(h.io, try h.connect());
+    defer c.stream.close(h.io);
+    var request: [128]u8 = undefined;
+    try c.send(try std.fmt.bufPrint(&request, "CONNECT allowed.test:{d} HTTP/1.1\r\n\r\n", .{up.port}));
+    var status: [128]u8 = undefined;
+    try testing.expectEqualStrings("HTTP/1.1 200 Connection Established", try c.status(&status));
+    var hello_buf: [600]u8 = undefined;
+    try c.send(clientHello(&hello_buf, "allowed.test"));
+    try h.waitReceipts(1);
+    try h.io.sleep(.fromMilliseconds(250), .awake);
+    cell.current.store(&views[1], .release);
+    try h.waitReceipts(2);
+    try h.io.sleep(.fromMilliseconds(250), .awake);
+    const sent = up.sent.load(.monotonic);
+    const end = try c.untilClosed();
+    try testing.expect(end.reset);
+    try testing.expect(end.bytes < sent);
+    try testing.expectEqual(sent, up.sent.load(.monotonic));
+    var row = try h.receiptAt(1);
+    defer row.deinit();
+    try expectField(row.value, "reason", "policy_narrowed");
+    try testing.expectEqual(@as(i64, 2), row.value.object.get("gen").?.integer);
+}
 
 test "CONNECT to a name outside the policy is refused with 403 and a receipt" {
     var h: Harness = undefined;

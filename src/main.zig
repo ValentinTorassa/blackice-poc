@@ -21,6 +21,8 @@ const usage =
     \\  blackice run --policy FILE [--env NAME]... [--relay --model ID...] -- CMD [ARG]...
     \\  blackice grant SCOPE HOST [--for 10m]
     \\  blackice revoke SCOPE HOST
+    \\  blackice app on --policy APPS.json | off | status (Linux; experimental, VM only)
+    \\  blackice app reload --policy APPS.json (Linux; experimental, VM only, not ready for host use)
     \\
 ;
 
@@ -45,6 +47,9 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     }
     const cmd = args[1];
+    if (std.mem.eql(u8, cmd, "app") and @import("builtin").os.tag == .linux) {
+        return @import("linux/apps/client.zig").run(init.gpa, io, args[2..], out, errw);
+    }
     if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version")) {
         try out.print("blackice {s}\n", .{version});
         return 0;

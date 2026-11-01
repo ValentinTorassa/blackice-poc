@@ -90,6 +90,17 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(probe_tests).step);
     }
 
+    // Separate, opt-in build: never loads or attaches anything.
+    const apps_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .linux });
+    const apps_root = b.createModule(.{ .root_source_file = b.path("src/linux_appfilter.zig"), .target = apps_target, .optimize = .ReleaseSafe, .strip = true });
+    const apps_options = b.addOptions();
+    apps_options.addOption(bool, "vm_faults", b.option(bool, "appfilter-vm-faults", "VM3-only reload fault build; NEVER use for a host install") orelse false);
+    apps_root.addOptions("appfilter_build", apps_options);
+    const apps = b.addExecutable(.{ .name = "blackice-linux-appfilter", .root_module = apps_root });
+    b.step("linux-appfilter", "Build the kernel-pinned Linux application filter (no install to host)").dependOn(&b.addInstallArtifact(apps, .{}).step);
+    const apps_tests = b.addTest(.{ .root_module = apps_root, .filters = &.{"appfilter"} });
+    b.step("linux-appfilter-test", "Run pure application-filter unit tests; no BPF or network activity").dependOn(&b.addRunArtifact(apps_tests).step);
+
     addRelease(b);
 }
 

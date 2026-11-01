@@ -34,7 +34,7 @@ final class FilterDataProvider: NEFilterDataProvider {
                 timer?.cancel(); timer = nil
                 snapshots.clear()
                 runID = identifier
-                _ = try snapshots.install(candidate)
+                try snapshots.install(candidate)
             }
             apply(Self.makeSettings()) { [weak self] error in
                 guard let self else { completionHandler(ConfigurationError.invalid("provider_stopped")); return }
@@ -57,7 +57,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                         }
                     }
                     self.controlEvent("scope_start", reason: "filter_settings_applied")
-                    // Also catches a preference change while applySettings was pending.
+                    // Also catches a preference change while applySettings was pending,
+                    // after scope_start so a start always begins with it.
                     self.reloadConfiguration()
                     self.startMaintenance()
                     completionHandler(nil)
@@ -94,7 +95,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func reloadConfiguration() {
         do {
-            // The same generation and digest again: nothing to activate or drop.
+            // A notification that leaves the snapshot as it was changes nothing and logs nothing.
             guard try snapshots.install(readConfiguration()) else { return }
             discardPending(reason: "policy_changed") { _ in true }
             controlEvent("policy_activated", reason: "snapshot_installed")
@@ -142,7 +143,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             // 256 * 16 KiB transient peek data at most, plus fixed metadata.
             guard pending.count < 256, pending[flow.identifier] == nil else {
                 pendingLock.unlock()
-                emitFlow(facts, result: resolved(result, denied: "tls_capacity"))
+                emitFlow(facts, result: Self.resolved(result, denied: "tls_capacity"))
                 return .drop()
             }
             pending[flow.identifier] = PendingTLS(flow: socket, facts: facts, result: result,
@@ -172,11 +173,11 @@ final class FilterDataProvider: NEFilterDataProvider {
             return .init(passBytes: 0, peekBytes: total)
         case .serverName:
             pending.removeValue(forKey: flow.identifier)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: nil, echPresent: entry.inspection.echPresent))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: nil, echPresent: entry.inspection.echPresent))
             return .allow()
         case .deny(let reason):
             pending.removeValue(forKey: flow.identifier)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: reason, echPresent: entry.inspection.echPresent))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: reason, echPresent: entry.inspection.echPresent))
             return .drop()
         }
     }
@@ -185,14 +186,15 @@ final class FilterDataProvider: NEFilterDataProvider {
         pendingLock.lock()
         let entry = pending.removeValue(forKey: flow.identifier)
         pendingLock.unlock()
-        if let entry { emitFlow(entry.facts, result: resolved(entry.result, denied: "tls_unparsed")) }
+        if let entry { emitFlow(entry.facts, result: Self.resolved(entry.result, denied: "tls_unparsed")) }
         return .drop()
     }
 
-    private func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
+    /// A pending decision after the TLS check or a drop; keeps the deciding snapshot's hostname mode.
+    static func resolved(_ result: AppDecision, denied reason: String?, echPresent: Bool = false) -> AppDecision {
         AppDecision(scope: result.scope, policy: result.policy, generation: result.generation,
                     decision: reason.map { Decision(allowed: false, reason: $0) } ?? result.decision,
-                    hostnameMode: result.hostnameMode, echPresent: echPresent)
+                    echPresent: echPresent, hostnameMode: result.hostnameMode)
     }
 
     private func startMaintenance() {
@@ -217,7 +219,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         pendingLock.unlock()
         for entry in removed.values {
             update(entry.flow, using: .drop(), for: .outbound)
-            emitFlow(entry.facts, result: resolved(entry.result, denied: reason))
+            emitFlow(entry.facts, result: Self.resolved(entry.result, denied: reason))
         }
     }
 
@@ -230,7 +232,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func emitFlow(_ facts: FlowFacts, result: AppDecision) {
         guard telemetry.shouldLog(result) else { return }
-        emit(Receipt.flow(facts, result: result), privateFields: true)
+        emit(Receipt.flow(facts, result: result, hostnameMode: result.hostnameMode), privateFields: true)
     }
 
     private func controlEvent(_ event: String, reason: String, detail: String = "") {

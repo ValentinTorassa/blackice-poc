@@ -110,7 +110,8 @@ struct AppBinding {
 }
 
 struct AppConfiguration {
-    let id: String
+    let sha256: String
+    var id: String { String(sha256.prefix(12)) }
     let generation: UInt32
     let unmatched: String
     let hostnameMode: String
@@ -145,7 +146,7 @@ struct AppConfiguration {
             return AppBinding(scope: app.scope,
                               identity: SigningIdentity(signingID: app.signingID, teamID: app.teamID), policy: policy)
         }
-        id = digestID(data); generation = raw.generation; unmatched = raw.unmatched; hostnameMode = raw.hostnameMode
+        sha256 = digestHex(data); generation = raw.generation; unmatched = raw.unmatched; hostnameMode = raw.hostnameMode
     }
 }
 
@@ -159,12 +160,13 @@ final class SnapshotStore {
         return current
     }
 
-    /// Returns false when the candidate is the snapshot already installed.
+    /// True when the candidate replaced the snapshot; false when it is the one already installed.
+    /// Two configurations are the same only if their full SHA-256 matches, not the 12-hex ID.
     @discardableResult
     func install(_ candidate: AppConfiguration) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         if let current {
-            if candidate.generation == current.generation && candidate.id == current.id { return false }
+            if candidate.generation == current.generation && candidate.sha256 == current.sha256 { return false }
             guard candidate.generation > current.generation else {
                 throw ConfigurationError.invalid("stale_generation")
             }
@@ -196,11 +198,10 @@ struct AppDecision {
     let policy: String
     let generation: UInt32
     let decision: Decision
-    /// Mode of the snapshot that decided. A receipt written after a newer
-    /// snapshot is installed still reports this one, as it does the generation.
-    var hostnameMode: String? = nil
     var requiredTLSHost: String? = nil
     var echPresent = false
+    /// Hostname mode of the snapshot this decision used; receipts report it rather than a later snapshot's.
+    var hostnameMode: String? = nil
 }
 
 enum AppEvaluator {
@@ -210,11 +211,8 @@ enum AppEvaluator {
                                decision: Decision(allowed: false, reason: "configuration_unavailable"))
         }
         func unbound(_ decision: Decision) -> AppDecision {
-            AppDecision(scope: AppFilterConstants.unboundScope, policy: config.id, generation: config.generation,
-                        decision: decision, hostnameMode: config.hostnameMode)
-        }
-        guard flow.direction != .unknown else {
-            return unbound(Decision(allowed: false, reason: "unknown_direction"))
+            AppDecision(scope: AppFilterConstants.unboundScope, policy: config.id, generation: config.generation, decision: decision,
+                        hostnameMode: config.hostnameMode)
         }
         // Only a positively identified ad hoc guest can use unmatched. Failed
         // resolution or signed-code validation must never fall into this path.
@@ -224,16 +222,16 @@ enum AppEvaluator {
         guard let app = flow.app.verifiedIdentity else {
             return unbound(Decision(allowed: false, reason: "unknown_app_identity"))
         }
+        // Unbound apps follow unmatched in every direction, so an unknown
+        // direction is only denied below, for a bound app.
         guard let binding = config.apps.first(where: { $0.identity == app }) else {
             return unbound(Decision(allowed: config.unmatched == "allow",
                                    reason: flow.direction == .inbound ? "outside_scope_inbound" : "outside_scope"))
         }
-        func bound(_ decision: Decision, requiredTLSHost: String? = nil) -> AppDecision {
-            AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
-                        decision: decision, hostnameMode: config.hostnameMode, requiredTLSHost: requiredTLSHost)
-        }
         let decision: Decision
-        if flow.direction == .inbound {
+        if flow.direction == .unknown {
+            decision = Decision(allowed: false, reason: "unknown_direction")
+        } else if flow.direction == .inbound {
             decision = Decision(allowed: false, reason: "inbound_not_allowed")
         } else if !flow.supportedSocket {
             decision = Decision(allowed: false, reason: "unsupported_socket")
@@ -243,10 +241,14 @@ enum AppEvaluator {
         }
         if decision.allowed && decision.reason == "allowed_by_rule" {
             guard flow.isTCP, let host = flow.hostname.flatMap(normalizeHost) else {
-                return bound(Decision(allowed: false, reason: "domain_requires_tls_tcp"))
+                return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
+                                   decision: Decision(allowed: false, reason: "domain_requires_tls_tcp"),
+                                   hostnameMode: config.hostnameMode)
             }
-            return bound(decision, requiredTLSHost: host)
+            return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
+                               decision: decision, requiredTLSHost: host, hostnameMode: config.hostnameMode)
         }
-        return bound(decision)
+        return AppDecision(scope: binding.scope, policy: binding.policy.id, generation: config.generation,
+                           decision: decision, hostnameMode: config.hostnameMode)
     }
 }

@@ -77,7 +77,9 @@ processes without a Team ID can be verified as known but cannot be enrolled by
 this binding format. Other verified identities follow the explicit `unmatched`
 action. Inbound flows resolve identity too: a bound app always denies with
 `inbound_not_allowed`; a verified unbound app follows `unmatched` with
-`outside_scope_inbound` (ad hoc flows retain `outside_scope_adhoc`).
+`outside_scope_inbound` (ad hoc flows retain `outside_scope_adhoc`). A flow the
+OS delivers without a direction denies for a bound app (`unknown_direction`) and
+follows `unmatched` for unbound and ad hoc apps, as in every other direction.
 
 See Apple's [signing-information API](https://developer.apple.com/documentation/security/seccodecopysigninginformation(_:_:_:))
 for dynamic-code information and its requirement to validate before trusting
@@ -235,7 +237,8 @@ Scope names start with `app-`. Duplicate scopes or identity pairs are rejected.
 binding with one of those names would be indistinguishable from them.
 The provider validates the full candidate before installing a snapshot under a
 lock. During a provider lifetime, a lower generation, or a different snapshot
-at the same generation, is rejected. Invalid updates retain the last valid
+at the same generation (compared by the full SHA-256 of the configuration
+bytes), is rejected. Invalid updates retain the last valid
 snapshot. An invalid startup configuration fails startup; callbacks without a
 snapshot deny while the provider runs. The host also requires a generation
 strictly above the saved configuration for every replacement. Neither check is
@@ -271,7 +274,8 @@ a ClientHello split across TLS records and duplicate extensions are rejected.
 Pending handshakes
 are dropped on a policy change; capacity exhaustion and timeout deny. Only the
 bounded initial handshake is held transiently, never logged or written to disk.
-The TCP connection handshake can occur before payload approval. This check
+The TCP connection handshake can occur before payload approval, and inbound
+bytes are not held: only the app's outbound bytes wait for the check. This check
 prevents switching the initial SNI or sending plaintext HTTP after a domain allow;
 it does not validate TLS certificates, decrypt later HTTP Host/`:authority`, or
 prevent routing/coalescing within a connection accepted under the same SNI.
@@ -323,15 +327,14 @@ Decision receipts use the flat core schema: `ts`, `scope`, `policy`, `gen`,
 optional `status` and `dropped` fields as in the core.
 Absent optional values are omitted. Flow decisions use `point: "app_filter"` and
 `detail` identifies `backend=network_extension;scope_kind=app`, the separate
-validated app/process identities and hostname provenance. `gen`, `policy` and
-`hostname_mode` come from the snapshot that made the decision, also when a
-held TLS handshake is logged after a newer snapshot was installed.
-Lifecycle/configuration events use `point: "control"`. `policy_activated` is
-written only when a reload installs a new snapshot, not when the provider reads
-the same generation and digest again. A refused startup or update records why in
-`detail` as `cause=<reason>` (for example `stale_generation` or
+validated app/process identities and hostname provenance.
+Lifecycle/configuration events use `point: "control"`; `policy_activated` is
+emitted only when an update installs a new snapshot, and a successful start logs
+`scope_start` before any update it catches up on. A refused startup or update
+records why in `detail` as `cause=<reason>` (for example `stale_generation` or
 `policy_sha256_mismatch`); decoder errors, which can quote the input, all become
-`cause=invalid_configuration_document`. String fields are cleaned
+`cause=invalid_configuration_document`. A flow receipt's `hostname_mode` is that
+of the snapshot that decided the flow. String fields are cleaned
 and capped at the same byte limits as the core. Invalid UTF-8 bytes, C0/C1,
 bidi and zero-width characters become `?`; truncation preserves UTF-8 character
 boundaries and appends `...`. The raw-byte cleaner handles malformed UTF-8 before
@@ -412,6 +415,7 @@ mapping key.
 | Host | `com.apple.developer.system-extension.install = true` |
 | Host and extension | `com.apple.developer.networking.networkextension = ["content-filter-provider-systemextension"]` |
 | Both, when signing | Matching `com.apple.application-identifier` and `com.apple.developer.team-identifier` from the profiles |
+| Extension, when signing | `com.apple.security.application-groups` with a group prefixed by the Team ID, for `NEMachServiceName` (below) |
 
 The templates in `macos/Resources/*.entitlements` contain only the capability
 keys; they are not provisioned identities. For release, prepare copies with the
@@ -430,8 +434,25 @@ complete this Developer ID deployment path. See Apple's
 [system extension installation entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.system-extension.install)
 and [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
-There is no Endpoint Security entitlement, app-group container or custom Mach
-service in this implementation. Configuration travels through
+A system network extension also needs `NEMachServiceName` in the
+`NetworkExtension` dictionary of its Info.plist, named under an app group the
+extension is entitled to, for example `<TeamID>.com.valentorassa.blackice.filter`.
+The host never connects to that service, so it does not get the group.
+Apple DTS describes the key as a hard requirement on the
+[developer forums](https://developer.apple.com/forums/thread/659052).
+`Filter-Info.plist` and the entitlement templates do not carry it, because the
+value depends on the real Team ID. `macos/signing-copies.sh TEAM_ID DIR` writes
+copies of `Filter-Info.plist`, `Filter.entitlements` and `Host.entitlements` to a
+fresh directory, with `NEMachServiceName` set to
+`<TeamID>.com.valentorassa.blackice.filter` and the app group
+`<TeamID>.com.valentorassa.blackice` in the extension's entitlements; the host's
+copy is the template unchanged. It never signs or edits the templates. Put that `Filter-Info.plist` in the extension bundle and
+sign with those entitlements, after adding the application and team identifiers
+from the profiles. An extension without the key is expected not to start;
+whether it starts with it is unverified until a signed run.
+
+There is no Endpoint Security entitlement in this implementation, and the
+provider keeps no files in an app-group container. Configuration travels through
 `NEFilterManager.providerConfiguration.vendorConfiguration`; diagnostic receipts
 use unified logging. A future durable control/receipt channel will need its own
 authenticated transport and entitlement review.
@@ -450,7 +471,12 @@ These are future deployment instructions, not steps performed by the build.
 macOS must approve the system extension and the network filter; inspect the
 normal System Settings prompts, or the corresponding managed deployment
 authorization. A restart-required response is not treated as completed
-activation. Keep SIP enabled and normal security settings. Never use developer
+activation. When an older build of the extension is installed, `activate`
+replaces it only with the same bundle ID at the same or a higher
+`CFBundleVersion`; a lower or unparseable version is refused
+(`replacement_refused`), so bump `CFBundleVersion` in `Filter-Info.plist` for
+every release. A deliberate rollback is `disable`, `deactivate`, then
+`activate`. Keep SIP enabled and normal security settings. Never use developer
 mode or disabled SIP as evidence of a supported installation.
 
 `activate`, `enable`, `disable`, `remove-config` and `deactivate` refuse an
@@ -519,18 +545,22 @@ plists passed `plutil`; 351 test assertions passed. The host's `make-config` and
 confirmed only linker ad hoc signing with no Team ID. No activation or live
 enforcement test was performed.
 
-CI compiles both bundles and runs these tests on every pull request on GitHub's
-`macos-latest` runner (`macos app filter` job), with whatever Command Line Tools
-that image ships (Swift 6.3.3 and the macOS 26.5 SDK when the job was added).
-That checks compilation and unit behaviour only; the runner never signs,
-installs or activates the extension.
+Since then, CI (the `macos app filter` job in `.github/workflows/ci.yml`) builds
+both bundles unsigned with `macos/build.sh`, runs `macos/test.sh` and checks
+the plists `macos/signing-copies.sh` writes for a synthetic Team ID, on GitHub's
+`macos-latest` runner for every pull request and push to `main`. That covers
+compilation, the unit tests and the plist contents only, on the runner's Xcode,
+not a signed run.
 
 Tests cover exact/wildcard matching, private and mapped addresses, IPv6 CIDRs,
 ports, strict configuration, identity binding isolation, inbound denial,
 ad hoc unmatched allow/deny, unresolved/invalid-signed denial, delegated-source
 handling, generations, receipt encoding and aggregate-only outside-scope logs.
 The actual Security framework identifies the ad hoc test executable distinctly
-and rejects missing/invalid audit tokens. Fake authenticators test denial and
+and rejects missing/invalid audit tokens. A test replaces the running test
+executable on disk to check that full validation then fails while the cached
+identity of the running image holds, and that without a cached identity the
+process still fails closed. Fake authenticators test denial and
 approval for every mutating command without prompting the user or changing
 preferences. Prompt tests check policy digests, identities, generation/unmatched
 changes, parent-label cleaning and identical terminal/authentication text.
@@ -538,10 +568,10 @@ Precondition tests check the refusal the host applies before the prompt for
 each action and saved state (the host CLI itself is not part of the test
 executable), and that owner-authentication receipts carry the shown digest and
 generation. Size, nesting and generation refusals are checked by their reason,
-with valid input on the accepted side of each limit. TLS tests port the proxy's
-ClientHello vectors and add truncated prefixes, callback slicing, exact-SNI
-mismatch, plaintext HTTP, UDP, ECH, duplicate extensions, invalid names and
-buffer limits. These tests do not replace
+with valid input on the accepted side of each limit.
+TLS tests port the proxy's ClientHello vectors and add truncated
+prefixes, callback slicing, exact-SNI mismatch, plaintext HTTP, UDP, ECH,
+duplicate extensions, invalid names and buffer limits. These tests do not replace
 signed-app runtime identity, real LocalAuthentication UI or Network Extension
 callback/timeout testing. No authentication prompt was displayed during testing.
 

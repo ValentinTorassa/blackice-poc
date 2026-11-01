@@ -154,3 +154,29 @@ enum ConfigurationUpdate {
         }
     }
 }
+
+/// Activation replaces an installed extension only with this extension at the same or a higher
+/// CFBundleVersion, so an older signed build cannot replace a newer one. A deliberate rollback is
+/// deactivate, then activate.
+enum ExtensionReplacement {
+    static func allowed(existingID: String, existingVersion: String, candidateID: String, candidateVersion: String) -> Bool {
+        guard existingID == AppFilterConstants.extensionBundleID, candidateID == AppFilterConstants.extensionBundleID,
+              let existing = version(existingVersion), let candidate = version(candidateVersion) else { return false }
+        return !candidate.lexicographicallyPrecedes(existing)
+    }
+
+    /// CFBundleVersion: one to three period-separated integers. Trailing zero components are
+    /// dropped so "1" and "1.0" compare equal. Anything else is unparseable and refuses.
+    static func version(_ text: String) -> [Int]? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count) else { return nil }
+        var numbers: [Int] = []
+        for part in parts {
+            guard !part.isEmpty, part.utf8.count <= 9, part.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let number = Int(part) else { return nil }
+            numbers.append(number)
+        }
+        while numbers.last == 0 { numbers.removeLast() }
+        return numbers
+    }
+}

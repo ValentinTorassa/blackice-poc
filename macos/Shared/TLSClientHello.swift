@@ -77,8 +77,7 @@ struct TLSInspection {
     let expectedHost: String
     private(set) var echPresent = false
 
-    // Explicit: before Swift 6.4 the memberwise initializer is private because
-    // `bytes` is, and the provider could not create an inspection.
+    /// Explicit: before Swift 6.4 the private properties make the memberwise initializer private.
     init(expectedHost: String) { self.expectedHost = expectedHost }
 
     mutating func receive(_ data: Data, offset: Int) -> TLSHelloResult {

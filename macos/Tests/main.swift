@@ -223,16 +223,18 @@ do {
            AppFilterConstants.reservedScopes.contains(AppEvaluator.evaluate(flow(app: SigningIdentity(signingID: "com.other", teamID: "OTHER12345")), configuration: config).scope),
            "evaluator scopes for unbound and unavailable are reserved")
     expect(!validTeamID("A\" OR true") && !validSigningID("com.a\" or true"), "requirement injection rejected")
+    expect(config.sha256.count == 64 && config.id == String(config.sha256.prefix(12)), "configuration keeps its full SHA-256; the ID is its prefix")
     let snapshots = SnapshotStore()
-    expect(try snapshots.install(config), "first snapshot installed")
-    // A reload of the same preference must not log a policy activation or drop held handshakes.
-    expect(try !snapshots.install(config), "same generation and digest is not a new snapshot")
+    expect(try snapshots.install(config), "first snapshot installs")
+    expect(try !snapshots.install(config), "same configuration again is not a new snapshot")
     let (_, changed) = try configuration(policy: #"{"mode":"allow-all"}"#)
-    rejects("same generation different policy rejected", reason: "stale_generation") { _ = try snapshots.install(changed) }
-    expect(snapshots.read()?.id == config.id, "failed update retains snapshot")
+    rejects("same generation different policy rejected") { try snapshots.install(changed) }
+    expect(snapshots.read()?.sha256 == config.sha256, "failed update retains snapshot")
     let (_, second) = try configuration(gen: 2)
-    expect(try snapshots.install(second), "higher generation installed")
-    rejects("stale generation rejected", reason: "stale_generation") { _ = try snapshots.install(config) }
+    expect(try snapshots.install(second), "higher generation installs a new snapshot")
+    rejects("stale generation rejected") { try snapshots.install(config) }
+    // Control receipts name why a start or update was refused.
+    rejects("stale generation names its cause", reason: "stale_generation") { _ = try snapshots.install(config) }
     expect(ConfigurationError.cause(of: ConfigurationError.invalid("policy_sha256_mismatch")) == "policy_sha256_mismatch",
            "refusal cause names the check")
     do {
@@ -254,7 +256,7 @@ do {
     expect(settings.defaultAction == .filterData, "default flow delivery to provider")
     expect(settings.rules.count == 3 && settings.rules.allSatisfy { $0.action == .filterData }, "loopback has explicit callback rules")
     let facts = flow(process: SigningIdentity(signingID: "com.apple.service", teamID: nil))
-    let receipt = Receipt.flow(facts, result: AppEvaluator.evaluate(facts, configuration: config))
+    let receipt = Receipt.flow(facts, result: AppEvaluator.evaluate(facts, configuration: config), hostnameMode: "ip-only")
     let line = try receipt.jsonLine()
     let json = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
     expect(line.filter { $0 == "\n" }.count == 1, "one newline per receipt")

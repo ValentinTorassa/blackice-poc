@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { DOCS, GROUPS } from '../content/docs';
 import { SITE } from '../content/site';
-import { recordedCheckpoints } from '../lib/evidence';
+import { evidenceEntries, findingsCheckpoints, recordedCheckpoints } from '../lib/evidence';
 import { IconArrowRight, IconGitHub } from './Icons';
 import DocToc from './DocToc';
 
@@ -27,7 +27,12 @@ export default function DocPage({ slug }) {
         <h1 className="doc-title">{doc.title}</h1>
         <p className="doc-desc">{doc.description}</p>
         <div className="doc-body">
-          <Body recorded={recordedSet.size} recordedSet={recordedSet} />
+          <Body
+            recorded={recordedSet.size}
+            recordedSet={recordedSet}
+            findingsSet={findingsCheckpoints()}
+            entries={evidenceEntries()}
+          />
         </div>
         <a className="doc-source" href={`${SITE.repo}/blob/main/site/content/docs.jsx`}>
           <IconGitHub size={14} />

@@ -2,7 +2,7 @@
 id: grant
 title: Grant
 owner: lead, network
-stage: poc
+stage: v0
 paths: src/control/, src/proxy/grants.zig
 cases: P0-04, P0-05
 depends: policy, proxy, receipts, scope-core
@@ -95,6 +95,8 @@ the operating system rules, which keep allowing only the proxy and relay ports.
 
 | Covers | Kind | Link | Note |
 |---|---|---|---|
+| grant.R4, grant.R5 | entry | [P0-05 Linux](../../evidence/P0-05-grant-expiry-linux.md) | Linux, same launcher and helper, one run. At the grant's end the proxy reset the connection opened under it, and a new connection to that name was refused again |
+| grant.R1, grant.R2, grant.R4, grant.R6 | entry | [P0-04 Linux](../../evidence/P0-04-owner-grant-linux.md) | Linux, same launcher and helper, one run. `blackice grant` from inside could not reach the control socket; the owner's grant let exactly one more name through, with an end time; `blackice revoke` took it back at once; the control socket was gone after the scope ended |
 | grant.R3, grant.R4, grant.R5 | entry | [P0-05 macOS](../../evidence/P0-05-grant-expiry-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58b9491 (with the reset of de93f22), Zig 0.17.0, one run, PR #12. A 20 s owner grant: the proxy wrote `grant_expired` (`connection_reset`) 11 ms after the end and the live stream stopped mid-body; the next connection got 403 (`no_matching_rule`); receipts `owner_grant`, then `granted` with rule `grant:httpbingo.org`, `gen` unchanged. Bytes already in the client's socket buffer stay readable after the cut. Revoke, plain HTTP and the boot clock are not shown in this run, and its `grant_expired` receipt predates the `ip` and `port` fields (afe126d) |
 | grant.R1, grant.R2, grant.R3, grant.R6, grant.R8 | entry | [P0-04 macOS](../../evidence/P0-04-owner-grant-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58e73cc, Zig 0.17.0, one run, PR #10. Self-grant from inside refused (PermissionDenied, no grant receipt); owner grant from outside let github.com through (`granted`); www.github.com still refused; no socket after the scope ended. The grant receipt and the granted allow (`grant:github.com`) show grant.R3; expiry (R4) is P0-05 |
 | grant.R1, grant.R5, grant.R6, grant.R7, grant.R9 | test | `zig build test`, src/proxy/test.zig: "a grant allows a refused name until it expires, and expiry closes the tunnel", "revoking a grant closes the tunnels opened under it", "a grant whose watchdog cannot start is refused, never unbounded", "grant expiry also cuts a plain HTTP exchange in flight"; src/control/test.zig: "grant and revoke from outside the scope", "requests are parsed strictly and bounded", "peerCred reports this process's uid and pid for a local peer", "a peer that never sends a full line is disconnected" | 65/65 passed at 986645a (PR #4), Zig 0.17.0, Linux x86_64, six runs, real loopback sockets, fixed resolver, stand-in upstreams; no network. The earlier hang in a control test did not recur. Same-user peers only; no test from inside a real scope yet |

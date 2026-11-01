@@ -16,8 +16,8 @@ A task scope covers a command that blackice starts. An app scope covers an app t
 and was started some other way: a browser, an editor, a chat client. It gives that app a policy of its own,
 checked from the app's first connection, so the owner can say "this app may reach only these places" without
 wrapping it. blackice needs both kinds before its first usable release, on macOS and on Linux. App scopes are
-not part of the proof of concept and are not built: on macOS they wait for a signed system extension, and on
-Linux the way to recognise an app still has to be proven.
+not part of v0 and do not run yet: on macOS the filter is built but not signed, and on Linux the way to
+recognise an app is designed and its first build is in review.
 
 ## Requirements
 
@@ -69,11 +69,12 @@ App scopes are planned, not designed in detail. Each platform has one candidate 
 | Task | Owner | State | Blocked by |
 |---|---|---|---|
 | macOS: Network Extension filter (Swift) and host app in `macos/`, deciding per app by code-signing identity, with the same policy and receipt formats; built unsigned (PR #8) | appfilter | done | |
-| macOS: single-writer receipts from the extension (today they go to the unified log) | appfilter | todo | |
+| macOS: single-writer receipts from the extension, in a file only the owner can read, followed live with `tail -f`; the design is reviewed by security before it is built. Today each per-connection decision goes to the unified log as a private entry | appfilter | todo | |
+| macOS: Developer ID signing and notarization steps for the host app and the filter | appfilter | doing | |
 | macOS: ClientHellos with ECH: allow on the exact outer server name, with an `ech_present` note (013d718) | appfilter | done | |
 | macOS: sign the extension and run it on a Mac | valen | blocked | No Apple Developer Program membership (signing) and no full Xcode on the Mac. Until then its state stays "built, unsigned" and never "verified" |
 | Linux: qualify desktop app groups (first-packet coverage, unknown groups, user-created units, migration, terminal children) | codex | todo | |
-| Linux: choose the matching mechanism (nftables socket match or cgroup eBPF) for app groups | codex | todo | |
+| Linux: choose how an app is recognised and matched, and build it; a design is reviewed; its first build had a security review, and the fixes from it are in review; kernel tests in a virtual machine and a security clearance come before any install | codex | doing | |
 | Show both app-scope cells as not available in status and docs | marketing | done | |
 
 ## Evidence

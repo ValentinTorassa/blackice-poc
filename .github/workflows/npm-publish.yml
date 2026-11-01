@@ -1,0 +1,255 @@
+# Publish the npm packages of a release. Rules and assumptions: docs/security-review/README.md ("npm").
+# Publishing a reviewed draft release starts this workflow. The publish job waits for the owner's approval in the
+# "npm" environment, and only that job can request an OIDC token.
+name: npm publish
+
+on:
+  release:
+    types: [published]
+
+# Nothing is granted by default. Each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: npm-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 22.23.3
+  # npm is pinned by version and by the sha512 of its registry tarball (`npm view npm@<version> dist.integrity`).
+  # npm 11.5.1 or later is needed for trusted publishing.
+  NPM_VERSION: 12.2.0
+  NPM_INTEGRITY: sha512-ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==
+
+jobs:
+  prepare:
+    name: verify the release and pack
+    if: github.repository == 'ValentinTorassa/blackice' && !github.event.release.draft && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      packs: ${{ steps.pack.outputs.packs }}
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      # Set by the owner: @legios and @legios/blackice. No default or namespace fallback.
+      NPM_SCOPE: ${{ vars.NPM_SCOPE }}
+      NPM_PACKAGE_NAME: ${{ vars.NPM_PACKAGE_NAME }}
+    steps:
+      - name: Check the tag and the package names; set the job's paths
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo '::error::expected a vX.Y.Z tag'; exit 1; }
+          : "${NPM_SCOPE:?set the NPM_SCOPE repository variable}"
+          : "${NPM_PACKAGE_NAME:?set the NPM_PACKAGE_NAME repository variable}"
+          [[ "$NPM_SCOPE" == '@legios' && "$NPM_PACKAGE_NAME" == '@legios/blackice' ]] || { echo '::error::release names must be @legios and @legios/blackice; stop and contact the release lead'; exit 1; }
+          # runner.temp is not available in job-level env, so the paths are set here for the later steps.
+          : > "$RUNNER_TEMP/npm-userconfig"
+          : > "$RUNNER_TEMP/npm-globalconfig"
+          {
+            printf 'VERSION=%s\n' "${TAG#v}"
+            printf 'RELEASE_DIR=%s\n' "$RUNNER_TEMP/release"
+            printf 'PACKAGE_DIR=%s\n' "$RUNNER_TEMP/npm-packages"
+            printf 'TARBALL_DIR=%s\n' "$RUNNER_TEMP/npm-tarballs"
+            printf 'NPM_CONFIG_USERCONFIG=%s\n' "$RUNNER_TEMP/npm-userconfig"
+            printf 'NPM_CONFIG_GLOBALCONFIG=%s\n' "$RUNNER_TEMP/npm-globalconfig"
+            printf 'NPM_CONFIG_CACHE=%s\n' "$RUNNER_TEMP/npm-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require the tagged commit to be on main
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          git merge-base --is-ancestor "$commit" origin/main
+          printf 'RELEASE_COMMIT=%s\n' "$commit" >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install the pinned npm
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          mkdir "$RUNNER_TEMP/npm-pin"
+          npm pack "npm@${NPM_VERSION}" --pack-destination "$RUNNER_TEMP/npm-pin" --ignore-scripts \
+            --registry=https://registry.npmjs.org --no-update-notifier > /dev/null
+          tarball="$RUNNER_TEMP/npm-pin/npm-${NPM_VERSION}.tgz"
+          actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          if [ "$actual" != "$NPM_INTEGRITY" ]; then
+            echo "::error::npm ${NPM_VERSION} tarball is ${actual}, expected ${NPM_INTEGRITY}"
+            exit 1
+          fi
+          npm install --global --offline --ignore-scripts --no-audit --no-fund --no-update-notifier "$tarball"
+          test "$(npm --version)" = "$NPM_VERSION"
+
+      - name: Download and verify the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir "$RELEASE_DIR"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RELEASE_DIR"
+          verify() {
+            gh attestation verify "$1" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$RELEASE_COMMIT" \
+              --deny-self-hosted-runners
+          }
+          verify "$RELEASE_DIR/SHA256SUMS"
+          # Check the file names in SHA256SUMS before sha256sum reads any path from it.
+          node --input-type=module > "$RUNNER_TEMP/release-files.txt" <<'NODE'
+          import { readdirSync, lstatSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { isDeepStrictEqual } from 'node:util';
+          import { releaseManifest } from './packaging/npm/prepare.mjs';
+          const { sums } = releaseManifest(process.env.RELEASE_DIR, process.env.VERSION);
+          const expected = ['SHA256SUMS', ...sums.keys()].sort();
+          if (!isDeepStrictEqual(readdirSync(process.env.RELEASE_DIR).sort(), expected)) {
+            throw new Error('the downloaded files do not match SHA256SUMS');
+          }
+          for (const name of expected) {
+            if (!lstatSync(join(process.env.RELEASE_DIR, name)).isFile()) throw new Error(`not a regular file: ${name}`);
+          }
+          for (const name of sums.keys()) console.log(name);
+          NODE
+          (cd "$RELEASE_DIR" && sha256sum -c SHA256SUMS)
+          while IFS= read -r name; do
+            verify "$RELEASE_DIR/$name"
+          done < "$RUNNER_TEMP/release-files.txt"
+          # Run a downloaded binary only after its checksum and its attestation pass.
+          native="$RELEASE_DIR/blackice-${VERSION}-x86_64-linux"
+          chmod 0755 "$native"
+          test "$("$native" version)" = "blackice ${VERSION}"
+
+      - name: Prepare the CLI-only packages
+        run: |
+          set -euo pipefail
+          node packaging/npm/prepare.mjs --release-dir "$RELEASE_DIR" --out-dir "$PACKAGE_DIR" \
+            --version "$VERSION" --scope "$NPM_SCOPE" --name "$NPM_PACKAGE_NAME"
+
+      - name: Pack and check every archive
+        id: pack
+        run: |
+          set -euo pipefail
+          node packaging/npm/pack.mjs --prepared-dir "$PACKAGE_DIR" --out-dir "$TARBALL_DIR"
+          # The publish job gets the names, order and sha512 of the archives from this output, not from the
+          # artifact, and refuses any archive that does not match.
+          packs="$(node -e '
+            const packs = require(process.argv[1]);
+            process.stdout.write(JSON.stringify(packs.map(p => ({ filename: p.filename, integrity: p.integrity }))));
+          ' "$TARBALL_DIR/packs.json")"
+          printf 'packs=%s\n' "$packs" >> "$GITHUB_OUTPUT"
+          echo "$packs"
+
+      - name: Upload the archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-tarballs
+          path: ${{ env.TARBALL_DIR }}/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Runs no code from the repository and no downloaded binary: only Node, the pinned npm and `npm publish`.
+    name: publish to npm
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      id-token: write
+    env:
+      PACKS: ${{ needs.prepare.outputs.packs }}
+    steps:
+      - name: Set the job's paths
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/npm-userconfig"
+          : > "$RUNNER_TEMP/npm-globalconfig"
+          {
+            printf 'TARBALL_DIR=%s\n' "$RUNNER_TEMP/npm-tarballs"
+            printf 'NPM_CONFIG_USERCONFIG=%s\n' "$RUNNER_TEMP/npm-userconfig"
+            printf 'NPM_CONFIG_GLOBALCONFIG=%s\n' "$RUNNER_TEMP/npm-globalconfig"
+            printf 'NPM_CONFIG_CACHE=%s\n' "$RUNNER_TEMP/npm-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install the pinned npm
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          mkdir "$RUNNER_TEMP/npm-pin"
+          npm pack "npm@${NPM_VERSION}" --pack-destination "$RUNNER_TEMP/npm-pin" --ignore-scripts \
+            --registry=https://registry.npmjs.org --no-update-notifier > /dev/null
+          tarball="$RUNNER_TEMP/npm-pin/npm-${NPM_VERSION}.tgz"
+          actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          if [ "$actual" != "$NPM_INTEGRITY" ]; then
+            echo "::error::npm ${NPM_VERSION} tarball is ${actual}, expected ${NPM_INTEGRITY}"
+            exit 1
+          fi
+          npm install --global --offline --ignore-scripts --no-audit --no-fund --no-update-notifier "$tarball"
+          test "$(npm --version)" = "$NPM_VERSION"
+
+      - name: Download the archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarballs
+          path: ${{ env.TARBALL_DIR }}
+
+      - name: Check the archives against the prepare job
+        run: |
+          set -euo pipefail
+          node --input-type=module > "$RUNNER_TEMP/publish-order.txt" <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const dir = process.env.TARBALL_DIR;
+          const packs = JSON.parse(process.env.PACKS);
+          if (!Array.isArray(packs) || packs.length !== 5) throw new Error('expected five packages');
+          const names = packs.map(p => p.filename);
+          if (JSON.stringify(readdirSync(dir).sort()) !== JSON.stringify([...names].sort())) {
+            throw new Error('the downloaded archives are not the ones the prepare job packed');
+          }
+          for (const { filename, integrity } of packs) {
+            if (!/^[a-z0-9][a-z0-9._-]*\.tgz$/.test(filename)) throw new Error(`unexpected archive name: ${filename}`);
+            const path = join(dir, filename);
+            if (!lstatSync(path).isFile()) throw new Error(`not a regular file: ${filename}`);
+            const actual = `sha512-${createHash('sha512').update(readFileSync(path)).digest('base64')}`;
+            if (actual !== integrity) throw new Error(`${filename} changed after packing`);
+            console.log(path);
+          }
+          NODE
+          cat "$RUNNER_TEMP/publish-order.txt"
+
+      - name: Publish the platform packages, then the launcher
+        run: |
+          set -euo pipefail
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          # The order comes from the prepare job: the four platform packages first, the launcher last. If one
+          # fails, the rest are not published. npm versions are immutable, so a partial publish needs the owner.
+          while IFS= read -r archive; do
+            npm publish "$archive" --provenance --access public --ignore-scripts \
+              --registry=https://registry.npmjs.org --no-update-notifier
+          done < "$RUNNER_TEMP/publish-order.txt"

@@ -2,7 +2,7 @@
 id: linux-task-scope
 title: Linux task scope
 owner: codex-linux
-stage: poc
+stage: v0
 paths: src/linux/, scripts/linux-setup.sh, scripts/linux-teardown.sh
 cases: P0-01, P0-02, P0-03, P0-04, P0-08, P0-09
 depends: policy, proxy, receipts
@@ -114,29 +114,36 @@ the system resolver's sockets do not exist, so it cannot ask a system service to
 | Privileged helper: fork a paused child, hold it by pidfd, enroll it in the scope cgroup, release when armed | codex-linux | done | |
 | `blackice-linux-helper` build target in build.zig | codex-linux | done | |
 | cgroup eBPF programs on connect4, connect6, sendmsg4 and sendmsg6 | codex-linux | done | |
-| Ring buffer reader that reports refusals to the receipt writer, with a lost-event count | codex-linux | todo | |
+| Ring buffer reader that reports refusals to the receipt writer, with a lost-event count | codex-linux | done | |
 | Receipts for sockets the seccomp filter refuses (`ping`, SCTP, raw): deferred, declared as a limit in docs/linux.md | codex-linux | done | |
-| Command stdin set to `/dev/null` when the core asks for it (ef66f8f) | codex-linux | done | |
+| Command stdin set to `/dev/null` when the core asks for it | codex-linux | done | |
 | Private mount namespace that hides resolver and daemon sockets | codex-linux | done | |
 | Landlock scoping and seccomp filter | codex-linux | done | |
 | `scripts/linux-setup.sh` and `scripts/linux-teardown.sh` | codex-linux | done | |
-| Security review of the setup script before it runs (e4d9ac3, then the a6a9a95 changes) | security | done | |
-| Protected paths in the helper, protocol v2 (89a5f49) | codex-linux | done | |
-| Security review and pin of the protocol v2 helper: 93412c1 reviewed safe; pinned at 35ae1f8, which builds it for baseline CPUs (helper `21509462…`) so its hash does not depend on the build machine | security | done | |
-| Run the setup script with sudo, once it is reviewed: done at e4d9ac3 (that helper could not start a scope); run it again at 35ae1f8 (helper `21509462…`), because older helpers are refused | valen | todo | |
+| Security review of the setup script before it runs, and of each later change to it | security | done | |
+| Protected paths in the helper, protocol v2 | codex-linux | done | |
+| Security review and pin of the protocol v2 helper, built for baseline CPUs so its hash does not depend on the build machine; the helper in the evidence runs is `515ebfac…` (7c3bcff) | security | done | |
+| Run the setup script with sudo, once it is reviewed: twice with earlier helper builds (the first could not start a scope), at c962271 (helper `c84a4f61…`) after the verifier fix below, and at 7c3bcff (helper `515ebfac…`) after the namespace fix | valen | done | |
+| First real run on Debian 13, kernel 6.12, with helper `21509462…` (30 Oct): it failed closed before the command ran, because the kernel's BPF verifier rejected an unreachable allow return in the deny-only programs. Fixed in c962271 (only `filter.zig`; security reviewed), now on #6 as fa3e4f9 | codex-linux | done | |
+| Second real run, with helper `c84a4f61…`: it failed closed before the command ran (`child containment: PermissionDenied`). The helper's child is not dumpable, so after it unshares its user namespace it cannot write its own uid and gid maps. Unit tests missed it because they start dumpable. Fix: the privileged parent writes the child's uid and gid maps itself, coordinated over the existing private pipes. Fixed in 7c3bcff, on #6 | codex-linux | done | |
 | Fixtures: immediate connect, fork and exec, TCP and both UDP modes on IPv4 and IPv6, migration, `systemd-run --user`, Docker socket, raw sockets, io_uring, `ping`, an SCTP connect, an unconnected ICMP `sendto`, `bind` and `listen`, DNS paths (`getent hosts`, `resolvectl query`, `busctl call org.freedesktop.resolve1`) | codex-linux | doing | |
-| End-to-end kernel deny with receipts, an off-host receiver that sees nothing per protocol and family, and an evidence entry: checks prepared, with receiver controls before and after each scoped stage (4e02c08; network's `scripts/e2e/linux-offhost.sh`, 1c20f45) | codex-linux | doing | the 07:00 install |
+| End-to-end kernel deny with receipts, an off-host receiver that sees nothing per protocol and family, and an evidence entry: checks prepared, with receiver controls before and after each scoped stage (`scripts/e2e/linux-offhost.sh` and `scripts/evidence/offhost-*.py`); recorded in the P0-01 and P0-02 Linux entries | codex-linux | done | |
 | docs/linux.md | codex-linux | done | |
+| After a helper death, sweep the user's orphaned scopes (kill, wait, remove the cgroup, warn) at the next helper start and as a user command. Today the survivors keep the dead proxy's port, which another local program can listen on, and removing them needs root (P0-06 finding P6-1; R9 fails in this case) | codex-linux | todo | |
 | docs/threat-model.md | codex | done | |
 
 ## Evidence
 
 | Covers | Kind | Link | Note |
 |---|---|---|---|
-| linux-task-scope.R13 | test | `zig build test`, src/linux/: "all generated BPF branches stay in bounds; only IPv4 TCP has an allow branch", "seccomp installs and refuses Unix sockets, namespaces and io_uring in a disposable child", "private mounts preserve uid and cwd, hide daemon paths, and protect state before exec", "outside sockets cannot be used as workload stdio" | 30/30 passed at a6a9a95 (PR #6), Zig 0.17.0, Debian 13 x86_64, no root, from a checkout under the home directory and from one under /tmp. Nothing ran with the helper's capabilities or with programs attached to a cgroup |
-| linux-task-scope.R8 | probe | Reported by the Linux owner: the helper installed at e4d9ac3 (SHA-256 `ef675825…`), Debian 13, no sudo during the run | The first scope launch failed closed: exit 125, `root_cgroup: PermissionDenied`, receipts `linux_helper_failure` and `linux_launch_refused`, and the command never ran. Cause: a chown before a chmod in the helper, fixed in a6a9a95. Not evidence for the deny checkpoints |
+| linux-task-scope.R1 | entry | [P0-01 Linux](../../evidence/P0-01-policy-before-exec-linux.md) | Debian 13, kernel 6.12.113, x86_64, launcher 020f389, helper 7c3bcff (`515ebfac…`), Zig 0.17.0, one run. The command read `scope_start` as its first receipt and its own copy of the policy before doing any work; appending a forged receipt was refused |
+| linux-task-scope.R2, linux-task-scope.R3 | entry | [P0-02 Linux](../../evidence/P0-02-real-deny-linux.md) | Debian 13, kernel 6.12.113, x86_64, launcher 020f389, helper 7c3bcff (`515ebfac…`), Zig 0.17.0, one run. TCP `connect`, UDP `connect` and UDP `sendto`, over IPv4 and IPv6, from the command and from a double-forked descendant: all 12 got `EPERM`, each with a `kernel_drop` receipt naming the PID and destination. An off-host receiver got 0 scoped payloads and 24/24 controls. IPv6 was over Tailscale |
+| linux-task-scope.R2, linux-task-scope.R3, linux-task-scope.R4 | entry | [P0-03 Linux](../../evidence/P0-03-explicit-allow-linux.md) | Same launcher and helper, one run. Direct TCP to 1.1.1.1:443 and 169.254.169.254:80 and UDP `sendto` refused with `kernel_drop` receipts; a lookup without the proxy failed, with two `kernel_drop` receipts for 127.0.0.1:53. `ping` refused by seccomp, with no receipt (declared limit) |
+| linux-task-scope.R13 | test | `zig build test`, src/linux/: "all generated BPF branches stay in bounds; only IPv4 TCP has an allow branch", "seccomp installs and refuses Unix sockets, namespaces and io_uring in a disposable child", "private mounts preserve uid and cwd, hide daemon paths, and protect state before exec", "outside sockets cannot be used as workload stdio" | 30/30 passed on an earlier build of PR #6, Zig 0.17.0, Debian 13 x86_64, no root, from a checkout under the home directory and from one under /tmp. Nothing ran with the helper's capabilities or with programs attached to a cgroup |
+| linux-task-scope.R8 | probe | Reported by the Linux owner: the first helper build installed (SHA-256 `ef675825…`), Debian 13, no sudo during the run | The first scope launch failed closed: exit 125, `root_cgroup: PermissionDenied`, receipts `linux_helper_failure` and `linux_launch_refused`, and the command never ran. Cause: a chown before a chmod in the helper, fixed in a later build of PR #6. Not evidence for the deny checkpoints |
 | linux-task-scope.R4 | probe | Name lookup from a network namespace with only loopback (bubblewrap), Debian 13, kernel 6.12, without blackice code | TCP to a public address was unreachable, but `example.com` still resolved through systemd-resolved's world-writable Unix socket. With a tmpfs over `/run/systemd/resolve`, resolution failed. A network namespace alone does not close DNS |
 | linux-task-scope.R2 | probe | fx 0.0.16 in the same kind of network namespace, scripted local model, stand-in proxy | A direct `curl` from a tool could not resolve the host; through the stand-in proxy it arrived as `CONNECT example.com:443`. Uses a network namespace, not cgroup rules, so it shows the proxy route, not the kernel rule |
+| linux-task-scope.R2, linux-task-scope.R3 | entry | [P0-06 Linux](../../evidence/P0-06-faults-linux.md) | Launcher 5f84f67, helper 515ebfac, host and a VM with the same helper: every direct attempt refused under each fault, and no scoped connection left the host; after a helper kill, a survivor's connection to the scope's own proxy port reached another local program that had taken that port (P6-1); refusals made while the launcher was stopped got their receipts after it resumed; writes lost to a full disk counted in `scope_end`. The same entry shows R9 failing after a helper kill (see Tasks) |
 
 ## Terms
 

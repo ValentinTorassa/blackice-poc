@@ -2,7 +2,7 @@
 id: fx-relay
 title: fx integration and relay
 owner: lead, network
-stage: poc
+stage: v0
 paths: integrations/fx/, src/fx/, src/relay/
 cases: P0-01, P0-02, P0-06, P0-07, P0-09
 depends: scope-core, proxy, receipts, macos-task-scope, linux-task-scope

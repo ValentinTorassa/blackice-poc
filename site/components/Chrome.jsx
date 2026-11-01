@@ -36,9 +36,11 @@ export function Nav({ wide = false }) {
         <Link className="brand" href="/" aria-label={`${SITE.name} home`}>
           <Logo size={22} />
           <Wordmark />
-          <span className="brand-tag">PoC</span>
+          <span className="brand-tag">v0</span>
         </Link>
-        <NavLinks repo={SITE.repo} />
+        <div className="nav-right">
+          <NavLinks repo={SITE.repo} />
+        </div>
       </div>
     </header>
   );
@@ -53,7 +55,9 @@ export function Footer({ wide = false }) {
             <Logo size={20} />
             <Wordmark />
           </Link>
-          <p className="faint">Proof of concept by {SITE.author}.</p>
+          <p className="faint">
+            v0, by <a href={SITE.authorUrl}>{SITE.author}</a>.
+          </p>
         </div>
         {FOOTER.map(([title, links]) => (
           <div className="footer-col" key={title}>

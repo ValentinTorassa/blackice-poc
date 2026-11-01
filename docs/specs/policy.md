@@ -2,7 +2,7 @@
 id: policy
 title: Policy
 owner: lead
-stage: poc
+stage: v0
 paths: src/core/policy.zig, examples/agent.json
 cases: P0-01, P0-02, P0-03
 depends:
@@ -37,7 +37,7 @@ names the rule that made it, so a person can see why a connection was allowed or
 ## Design
 
 The policy is data, not code: there are no conditions, no includes and no defaults that widen access. Three
-modes cover the proof of concept. Names and networks are checked in two steps: first the name the program
+modes cover v0. Names and networks are checked in two steps: first the name the program
 asked for, then every address that name resolves to. The second step stops an allowed name that points at
 `127.0.0.1` or a home router from reaching local services.
 

@@ -2,7 +2,7 @@
 id: receipts
 title: Receipts
 owner: lead
-stage: poc
+stage: v0
 paths: src/core/receipt.zig
 cases: P0-02, P0-03, P0-09
 depends: policy
@@ -89,12 +89,15 @@ and `jq` are enough to read it.
 | Proxy decisions write receipts | network | done | |
 | Relay calls and grants write receipts | network | doing | |
 | Clean and cut long fields instead of dropping the line | lead | done | |
-| Linux kernel refusals (ring buffer) passed to the `blackice` process as receipts | codex-linux | todo | |
+| Linux kernel refusals (ring buffer) passed to the `blackice` process as receipts | codex-linux | done | |
+| After a helper kill, the receipts say `command_not_started` and `scope_end` 127 for a command that had been running; report a helper failure during the run as such (P0-06 finding P6-4) | lead | todo | |
+| Kernel receipts carry the kernel's refusal time in `detail`: `ts` is when the line was written, so refusals made while `blackice run` was stopped carry the resume time (P0-06) | codex-linux | todo | |
 
 ## Evidence
 
 | Covers | Kind | Link | Note |
 |---|---|---|---|
+| receipts.R2, receipts.R4 | entry | [P0-02 Linux](../../evidence/P0-02-real-deny-linux.md) | Debian 13, kernel 6.12.113, x86_64, launcher 020f389, helper 7c3bcff (`515ebfac…`), Zig 0.17.0, one run. Every refusal has a `kernel_drop` receipt with point `kernel` and reason `loopback_proxy_only` |
 | receipts.R2, receipts.R4 | entry | [P0-02 macOS](../../evidence/P0-02-real-deny-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58e73cc, Zig 0.17.0, one run, PR #11. Receipts from three points (`control`, `kernel`, `proxy`), each with `ts`, `scope`, `policy`, `gen`, `point` and `event`. macOS logs refusals only for Apple-signed programs; here python3 and curl |
 | receipts.R1, receipts.R2, receipts.R4 | entry | [P0-04 macOS](../../evidence/P0-04-owner-grant-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58e73cc, Zig 0.17.0, one run, PR #10. Eight lines in one file, flat fields, points `control`, `kernel` and `proxy` |
 | receipts.R1, receipts.R2 | test | `zig build test`, src/core/receipt.zig: "receipt lines are JSON with nulls omitted" | One line per receipt, escaping, nulls omitted. 21/21 passed at 99e2f4e (PR #1), Zig 0.17.0, Linux x86_64 |

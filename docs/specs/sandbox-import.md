@@ -2,7 +2,7 @@
 id: sandbox-import
 title: Sandbox policy importer
 owner: codex
-stage: poc
+stage: v0
 paths: src/core/sandbox_import.zig, tests/vectors/
 cases: P0-03
 depends: policy
@@ -23,7 +23,7 @@ exactly is never imported approximately, because an approximation could allow so
 | ID | Requirement | Checks |
 |---|---|---|
 | sandbox-import.R1 | When the input is `"deny-all"`, or a policy with no allowed domains and no allowed subnets (including `{}`, `{"allow": {}}`, `{"subnets": {}}` and a policy with only `subnets.deny`), the importer shall produce a `deny-all` blackice policy. | P0-03 |
-| sandbox-import.R2 | When the input is `"allow-all"`, the importer shall produce an `allow-all` blackice policy. | P0-03 |
+| sandbox-import.R2 | When the input is `"allow-all"`, the importer shall refuse it (`UnsupportedMode`); this version never produces an `allow-all` blackice policy. | P0-03 |
 | sandbox-import.R3 | When the input lists allowed domains, either as an array or as an object whose rule lists are all empty, the importer shall produce an `allowlist` policy with the same names, keeping an exact name exact and a leading `*.` as a wildcard for names below it. | P0-03 |
 | sandbox-import.R4 | When the input has IPv4 ranges in `subnets.allow` or `subnets.deny`, the importer shall copy them to the blackice policy unchanged. If it has an IPv6 range, the importer shall refuse the policy; this version does not import them. | P0-03 |
 | sandbox-import.R5 | If a domain rule carries a `transform`, `forwardURL` or `match`, the importer shall refuse the whole policy and name the domain and the field. | P0-03 |
@@ -46,9 +46,9 @@ configuration and are not read from the imported file.
 
 **Technical.**
 
-- Input: a JSON file holding a `networkPolicy` value: the string `"allow-all"` or `"deny-all"`, or an object
-  with `allow` (an array of domain patterns, or an object mapping each pattern to a rule list) and `subnets`
-  (`allow` and `deny` CIDR lists). The exact accepted wrapper is fixed by the test vectors.
+- Input: a JSON file holding a `networkPolicy` value: the string `"deny-all"` (`"allow-all"` is refused, R2),
+  or an object with `allow` (an array of domain patterns, or an object mapping each pattern to a rule list) and
+  `subnets` (`allow` and `deny` CIDR lists). The exact accepted wrapper is fixed by the test vectors.
 - Output: a `blackice.policy/v0` policy (see [policy](policy.md)) as a candidate to review. Profile
   `blackice.sandbox-subset/v1`, written against one pinned commit of the Sandbox source. Using the candidate
   for a scope goes through a capability gate (R10); the capabilities default to unsupported.

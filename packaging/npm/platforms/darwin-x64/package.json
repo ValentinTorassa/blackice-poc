@@ -1,0 +1,25 @@
+{
+  "name": "@legios/blackice-darwin-x64",
+  "version": "0.1.0",
+  "private": true,
+  "description": "blackice native binary for darwin/x64",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ValentinTorassa/blackice.git",
+    "directory": "packaging/npm"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/blackice"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

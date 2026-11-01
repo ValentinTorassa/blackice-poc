@@ -90,6 +90,19 @@ jobs:
       - name: Build
         run: zig build --summary all
 
+      # Ubuntu's AppArmor gives a process no capabilities inside a user namespace it creates without
+      # privilege, so the Linux confinement tests cannot mount there. The runner is a throwaway VM.
+      # Hosts with this setting make blackice scopes fail closed; see docs/linux.md.
+      - name: Allow unprivileged user namespaces
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -e "$knob" ]; then
+            echo "apparmor_restrict_unprivileged_userns was $(cat "$knob")"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Test
         run: zig build test --summary all
 

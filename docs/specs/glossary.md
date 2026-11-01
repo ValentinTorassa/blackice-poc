@@ -35,7 +35,7 @@ stays in the relay, outside every scope, so the agent never holds it.
 a browser or an editor.
 
 **Technical.** It needs the OS to say which app a connection comes from: a Network Extension on macOS, and a
-grouping such as a desktop or service cgroup on Linux. Not part of the proof of concept; required for the
+grouping such as a desktop or service cgroup on Linux. Not part of v0; required for the
 first usable release.
 
 **See also.** scope, task scope, Network Extension
@@ -164,10 +164,12 @@ buffer.
 **Plain.** Encrypted Client Hello: a newer TLS feature that hides the name of the site a program is
 connecting to, even from the local network.
 
-**Technical.** It encrypts the inner ClientHello, including SNI, behind a public outer name. Anything that
-filters by reading SNI loses that signal. blackice v0 does not read SNI, so ECH does not change its decisions.
+**Technical.** It encrypts the inner ClientHello, including the real SNI, behind a public outer name. Anything
+that filters by reading SNI sees only the outer name. The blackice proxy requires the SNI it sees to equal the
+`CONNECT` host (proxy.R10), so with ECH it compares the outer name: a tunnel whose outer name differs is closed
+(`sni_mismatch`), and the inner name stays hidden from it. No run with ECH through the proxy is recorded.
 
-**See also.** SNI, TLS
+**See also.** SNI, TLS, CONNECT proxy
 
 ## enforcement point
 
@@ -186,7 +188,7 @@ seen.
 the platform, build, policy, commands, result, receipts, recording and limits. Only an evidence entry
 verifies a requirement.
 
-**See also.** evidence gate, probe, PoC-0
+**See also.** evidence gate, probe, v0 checkpoints
 
 ## evidence gate
 
@@ -195,7 +197,7 @@ verifies a requirement.
 **Technical.** Each gate names what it blocks (for example a release cell) and who owns the test. Passing it
 needs evidence entries, not reasoning or source reading.
 
-**See also.** evidence entry, PoC-0
+**See also.** evidence entry, v0 checkpoints
 
 ## exit status
 
@@ -357,16 +359,6 @@ a declared limit: blackice does not defend against other programs of the same us
 
 **See also.** grant, control socket
 
-## PoC-0
-
-**Plain.** The first proof of concept: a short list of checkpoints that show the boundary works on real
-machines, not a product release.
-
-**Technical.** Checkpoints `P0-01` to `P0-10` (for example `P0-02`, real deny). Each is marked recorded only
-when an evidence entry with its ID exists.
-
-**See also.** evidence entry, evidence gate
-
 ## policy
 
 **Plain.** A small file that says where a scope may connect.
@@ -513,10 +505,13 @@ on; a result with SIP off is reported as such.
 connection.
 
 **Technical.** Server Name Indication, a TLS ClientHello extension. It is a claim by the client, can be absent,
-and is hidden by Encrypted Client Hello. blackice v0 does not read it; the proxy decides on the CONNECT host
-name and its own name resolution.
+and is hidden by Encrypted Client Hello. The blackice proxy decides on the `CONNECT` host name and its own name
+resolution, then reads the tunnel's first bytes: they must be a ClientHello, and for a destination given as a
+name its SNI must be present and equal that host. Otherwise the proxy closes the tunnel before any of the
+client's bytes is forwarded (`not_tls`, `tls_unparsed`, `sni_missing`, `sni_mismatch`; proxy.R10, proxy.R11).
+The connection to the destination is already open by then. A matching name does not prove who the server is.
 
-**See also.** CONNECT proxy
+**See also.** CONNECT proxy, ECH, domain fronting
 
 ## state directory
 
@@ -567,3 +562,13 @@ and the server.
 host name and its own name resolution, before any TLS bytes flow.
 
 **See also.** SNI, ECH, CONNECT proxy
+
+## v0 checkpoints
+
+**Plain.** The checkpoints for v0, the first version: a short list that shows the boundary works on real
+machines. v0 is not a product release.
+
+**Technical.** Checkpoints `P0-01` to `P0-10` (for example `P0-02`, real deny). Each is marked recorded only
+when an evidence entry with its ID exists.
+
+**See also.** evidence entry, evidence gate

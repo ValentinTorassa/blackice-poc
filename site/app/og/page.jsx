@@ -29,7 +29,7 @@ export default function OgCard() {
         .og > * { position: relative; z-index: 1; }
         .og-left { display: flex; flex-direction: column; height: 100%; }
         .og-top { display: flex; align-items: center; gap: 16px; font-size: 38px; color: #ededed; }
-        .og-title { margin: auto 0 0; font-size: 68px; line-height: 1; letter-spacing: -0.055em; font-weight: 600;
+        .og-title { margin: auto 0 0; font-size: 60px; line-height: 1; letter-spacing: -0.055em; font-weight: 600;
           background: linear-gradient(180deg, #fff 40%, rgba(255, 255, 255, 0.6)); -webkit-background-clip: text; background-clip: text; color: transparent; padding-bottom: 0.06em; }
         .og-cmd { margin-top: 40px; align-self: flex-start; font-family: var(--mono); font-size: 21px; color: #a1a1a1; padding: 14px 20px;
           border: 1px solid #262626; border-radius: 10px; background: #0a0a0a; }

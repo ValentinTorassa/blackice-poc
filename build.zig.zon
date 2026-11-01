@@ -1,6 +1,6 @@
 .{
     .name = .blackice,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0x7ee9a2426f96ca0d,
     // No dependencies: the product uses the Zig standard library only.
@@ -9,6 +9,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "tools",
         "tests",
         "LICENSE",
         "README.md",

@@ -83,7 +83,7 @@ These flags are integration requirements, not an implemented capability detector
 
 ## Protocol differences that block a parity claim
 
-Vercel's [firewall documentation](https://vercel.com/docs/sandbox/concepts/firewall#http-and-https) matches domain rules against the TLS hostname. Plain HTTP cannot be allowed by a domain rule; it needs an allowed IP range. The blackice PoC proxy applies hostname rules to plain HTTP as well as CONNECT requests. That native behavior differs from Sandbox semantics.
+Vercel's [firewall documentation](https://vercel.com/docs/sandbox/concepts/firewall#http-and-https) matches domain rules against the TLS hostname. Plain HTTP cannot be allowed by a domain rule; it needs an allowed IP range. The blackice v0 proxy applies hostname rules to plain HTTP as well as CONNECT requests. That native behavior differs from Sandbox semantics.
 
 For example, with only `api.example.com` allowed and no allowed subnet, the native proxy can admit `http://api.example.com`; Sandbox's domain rule does not permit that plaintext connection. A backend using that behavior must leave `bound_tls_domains` false, so `policyForBackend()` refuses a candidate containing domain permissions. A documentation warning or acknowledgement of the local address ceiling does not satisfy this gate. An adapter needs a qualified protocol-specific path before it can activate such imports.
 

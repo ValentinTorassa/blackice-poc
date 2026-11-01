@@ -2,7 +2,7 @@
 
 blackice is an experimental local network-permission system. The first intended usable release covers both ordinary applications and managed command sessions on macOS and Linux. A command-only demonstration does not complete that release.
 
-The merged PoC-0 baseline (`727a5db`) implements policy parsing, a proxy and model relay, temporary grants, receipts and an experimental macOS Seatbelt task launcher. Its Linux task backend still refuses launch. The macOS task runs are recorded in `evidence/`; they do not qualify an app filter or the Linux backend. A successful build or a backend's static availability flag is not evidence that all of the guarantees below hold.
+Main implements policy parsing, a proxy and model relay, temporary grants, receipts, and two task launchers: an experimental macOS Seatbelt launcher and a Linux launcher with cgroup eBPF programs and a privileged helper. Task runs on both are recorded in `evidence/`; they do not cover the app filters. A successful build is not evidence that all of the guarantees below hold.
 
 ## Assets and actors
 

@@ -1,0 +1,26 @@
+{"t": 1793366834.871701, "event": "listening", "pid": 21535, "v4": "RECEIVER_V4", "v6": "RECEIVER_V6", "ports": {"tcp4": 47121, "tcp6": 47122, "udp4": 47123, "udp6": 47124}}
+{"t": 1793366834.882119, "proto": "tcp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-tcp4"}
+{"t": 1793366834.8878038, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-udp4-send"}
+{"t": 1793366834.887854, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-udp4-connect"}
+{"t": 1793366834.8880541, "proto": "tcp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-tcp6"}
+{"t": 1793366834.888101, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-udp6-send"}
+{"t": 1793366834.8881102, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-immediate-udp6-connect"}
+{"t": 1793366835.950017, "proto": "tcp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-tcp4"}
+{"t": 1793366835.9553258, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-udp4-send"}
+{"t": 1793366835.955594, "proto": "tcp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-tcp6"}
+{"t": 1793366835.9556649, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-udp4-connect"}
+{"t": 1793366835.955722, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-udp6-send"}
+{"t": 1793366835.955776, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-immediate-udp6-connect"}
+{"t": 1793366835.96519, "proto": "tcp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-tcp4"}
+{"t": 1793366835.9702442, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-udp4-send"}
+{"t": 1793366835.970413, "proto": "tcp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-tcp6"}
+{"t": 1793366835.970491, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-udp4-connect"}
+{"t": 1793366835.970578, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-udp6-send"}
+{"t": 1793366835.970637, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-before-descendant-udp6-connect"}
+{"t": 1793366837.268765, "proto": "tcp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-tcp4"}
+{"t": 1793366837.274341, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-udp4-send"}
+{"t": 1793366837.27459, "proto": "tcp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-tcp6"}
+{"t": 1793366837.27465, "proto": "udp4", "source": "SENDER_V4", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-udp4-connect"}
+{"t": 1793366837.2747068, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-udp6-send"}
+{"t": 1793366837.2747588, "proto": "udp6", "source": "SENDER_V6", "data": "d340bbf6d0804968a9b24b5ff95807e8-after-descendant-udp6-connect"}
+{"t": 1793366837.2805061, "event": "stopped"}

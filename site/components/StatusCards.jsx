@@ -38,6 +38,7 @@ export default function StatusCards() {
                   <StatusDot state={cellState(row[k])} />
                 </div>
                 <p>{row[k].how}</p>
+                {row[k].note && <p>{row[k].note}</p>}
               </div>
             ))}
           </article>

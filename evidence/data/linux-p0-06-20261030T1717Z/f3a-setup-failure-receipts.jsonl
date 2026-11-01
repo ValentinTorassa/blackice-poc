@@ -1,0 +1,4 @@
+{"ts":"2026-10-30T17:20:14.790Z","scope":"s-37104d87","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_start","detail":"backend linux-cgroup-bpf; command bash; proxy port 33553; 2 protected files"}
+{"ts":"2026-10-30T17:20:14.790Z","scope":"s-37104d87","policy":"b28c9f29dbea","gen":1,"point":"control","event":"warning","verdict":"deny","reason":"linux_launch_refused","detail":"InvalidState"}
+{"ts":"2026-10-30T17:20:14.790Z","scope":"s-37104d87","policy":"b28c9f29dbea","gen":1,"point":"control","event":"warning","reason":"command_not_started","detail":"SpawnFailed"}
+{"ts":"2026-10-30T17:20:14.790Z","scope":"s-37104d87","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_end","status":127,"detail":"command_not_started","dropped":0}

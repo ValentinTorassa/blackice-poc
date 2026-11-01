@@ -1,0 +1,318 @@
+# Build a blackice release from a version tag. Rules and assumptions: docs/security-review/README.md ("Releases").
+# Nothing here runs until someone pushes a tag that starts with "v". The workflow ends with a DRAFT release;
+# publishing it stays a manual step.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Nothing is granted by default. Each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ZIG_VERSION: 0.17.0
+  MACOS_MIN: "13.0"
+  # Linux helper targets in a release. Only x86_64-linux has been installed and checked on a real machine; no
+  # helper ships for a target before that. Adding one means adding it to the attest matrix below too.
+  HELPER_TARGETS: x86_64-linux
+
+jobs:
+  tag:
+    name: check the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: The tag is vX.Y.Z, matches build.zig.zon, and its commit is on main
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::release tags look like v1.2.3"
+            exit 1
+          fi
+          # build.zig checks at compile time that src/main.zig declares the same version.
+          zon_version="$(sed -n 's/^ *\.version = "\([^"]*\)",$/\1/p' build.zig.zon)"
+          if [ "$zon_version" != "${TAG#v}" ]; then
+            echo "::error::build.zig.zon says version '${zon_version}', the tag says ${TAG#v}"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::the tagged commit is not on main"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    # Two builders on different runner images. The compare job fails unless every byte matches.
+    name: build (${{ matrix.os }})
+    needs: tag
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # sha256 values copied from https://ziglang.org/download/index.json ("0.17.0"), as in ci.yml.
+          - os: ubuntu-latest
+            zig_platform: x86_64-linux
+            zig_sha256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+          - os: macos-latest
+            zig_platform: aarch64-macos
+            zig_sha256: b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same step as ci.yml. Keep the two in sync.
+      - name: Install Zig (sha256 pinned)
+        env:
+          ZIG_PLATFORM: ${{ matrix.zig_platform }}
+          ZIG_SHA256: ${{ matrix.zig_sha256 }}
+        run: |
+          set -euo pipefail
+          file="zig-${ZIG_PLATFORM}-${ZIG_VERSION}.tar.xz"
+          dl="${RUNNER_TEMP}/zig-download"
+          mkdir -p "$dl"
+          # Zig asks automation to use its community mirrors. Any source is fine: the sha256 decides.
+          mirrors=$(curl -fsS --proto '=https' --tlsv1.2 --max-time 20 \
+              https://ziglang.org/download/community-mirrors.txt \
+            | grep -E '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~-]+)*/?$' \
+            | awk 'BEGIN { srand() } { print rand() "\t" $0 }' | sort -n | cut -f2- | awk 'NR <= 5') || mirrors=""
+          ok=0
+          for base in $mirrors "https://ziglang.org/download/${ZIG_VERSION}"; do
+            base="${base%/}"
+            rm -f "${dl}/${file}"
+            if curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --max-time 300 \
+                -o "${dl}/${file}" "${base}/${file}?source=blackice-ci"; then
+              if echo "${ZIG_SHA256}  ${dl}/${file}" | shasum -a 256 -c - >/dev/null; then
+                echo "Zig ${ZIG_VERSION} from ${base}: sha256 verified"
+                ok=1
+                break
+              fi
+              echo "::warning::sha256 mismatch for ${file} from ${base}"
+            fi
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::no source served ${file} with the pinned sha256"
+            exit 1
+          fi
+          tar -xJf "${dl}/${file}" -C "$RUNNER_TEMP"
+          zig_dir="${RUNNER_TEMP}/zig-${ZIG_PLATFORM}-${ZIG_VERSION}"
+          test "$("${zig_dir}/zig" version)" = "$ZIG_VERSION"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+
+      - name: Build the release files
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/release"
+          mkdir "$out"
+          zig build release -Dmacos-min="$MACOS_MIN" --summary all
+          # zig-out/release must hold exactly the expected files plus the build's own SHA256SUMS, and that
+          # SHA256SUMS must check. Nothing else is copied, so an extra file never reaches the release.
+          expected=()
+          for t in x86_64-linux aarch64-linux aarch64-macos x86_64-macos; do expected+=("blackice-${VERSION}-${t}"); done
+          for t in $HELPER_TARGETS; do expected+=("blackice-linux-helper-${VERSION}-${t}"); done
+          if ! diff <(printf '%s\n' "${expected[@]}" SHA256SUMS | LC_ALL=C sort) <(ls -A zig-out/release | LC_ALL=C sort); then
+            echo "::error::zig-out/release does not hold the expected files"
+            exit 1
+          fi
+          (cd zig-out/release && shasum -a 256 -c SHA256SUMS)
+          for f in "${expected[@]}"; do cp "zig-out/release/${f}" "$out/"; done
+          (cd "$out" && shasum -a 256 -- *)
+
+      - name: The helper matches scripts/linux-build-helper.sh
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -f zig-out/bin/blackice-linux-helper
+          ZIG="$(command -v zig)" bash scripts/linux-build-helper.sh
+          # Users build the helper with this script before setup, so its bytes must be the release's.
+          cmp zig-out/bin/blackice-linux-helper "${RUNNER_TEMP}/release/blackice-linux-helper-${VERSION}-x86_64-linux"
+
+      - name: The binary reports the tag's version
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/release/blackice-${VERSION}-x86_64-linux"
+          chmod +x "$bin"
+          got="$("$bin" version)"
+          if [ "$got" != "blackice ${VERSION}" ]; then
+            echo "::error::the binary says '${got}', the tag says ${VERSION}"
+            exit 1
+          fi
+
+      - name: Upload this builder's files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-${{ matrix.os }}
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 5
+
+  compare:
+    name: compare the two builds
+    needs: [tag, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Download the Linux builder's files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-ubuntu-latest
+          path: a
+
+      - name: Download the macOS builder's files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-macos-latest
+          path: b
+
+      - name: Same files, same bytes; write SHA256SUMS
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=()
+          for t in x86_64-linux aarch64-linux aarch64-macos x86_64-macos; do expected+=("blackice-${VERSION}-${t}"); done
+          for t in $HELPER_TARGETS; do expected+=("blackice-linux-helper-${VERSION}-${t}"); done
+          for d in a b; do
+            if ! diff <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) <(ls -A "$d" | LC_ALL=C sort); then
+              echo "::error::the files from builder '${d}' are not the expected set"
+              exit 1
+            fi
+          done
+          for f in "${expected[@]}"; do
+            if ! cmp "a/${f}" "b/${f}"; then
+              echo "::error::${f} differs between the Linux and the macOS builder"
+              exit 1
+            fi
+          done
+          (cd a && sha256sum -- "${expected[@]}" | LC_ALL=C sort -k2 > SHA256SUMS)
+          cat a/SHA256SUMS
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: a/
+          if-no-files-found: error
+          retention-days: 5
+
+  attest:
+    # One attestation per file: `gh attestation verify <file>` needs nothing but that file.
+    name: attest ${{ matrix.asset }}
+    needs: [tag, compare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        # "{v}" stands for the version. Keep in step with HELPER_TARGETS.
+        asset:
+          - blackice-{v}-x86_64-linux
+          - blackice-{v}-aarch64-linux
+          - blackice-{v}-aarch64-macos
+          - blackice-{v}-x86_64-macos
+          - blackice-linux-helper-{v}-x86_64-linux
+          - SHA256SUMS
+    steps:
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Pick the file
+        id: file
+        env:
+          ASSET: ${{ matrix.asset }}
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          name="${ASSET//\{v\}/$VERSION}"
+          test -f "release/${name}"
+          echo "path=release/${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.file.outputs.path }}
+
+  release:
+    name: draft the release
+    needs: [tag, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum -c SHA256SUMS
+          cat > "${RUNNER_TEMP}/notes.md" <<EOF
+          blackice ${VERSION}, built from ${GITHUB_SHA} by two builders (Linux and macOS runners) that produced
+          byte-identical files. Zig ${ZIG_VERSION}, ReleaseSafe, stripped, macOS minimum ${MACOS_MIN}.
+
+          Before running a file:
+          1. Integrity: \`sha256sum -c SHA256SUMS --ignore-missing\` (macOS: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`).
+          2. Provenance: \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml\`.
+          3. Independence: check out ${TAG}, install Zig ${ZIG_VERSION}, run \`zig build release -Dmacos-min=${MACOS_MIN}\`,
+             and compare the hashes.
+
+          Linux task scopes need a one-time setup with sudo, run from a checkout of ${TAG}
+          (\`scripts/linux-build-helper.sh\`, then \`scripts/linux-setup.sh\`; see docs/linux.md). The helper file here
+          is what that script builds, so you can check your build against it. There is no aarch64 Linux helper yet:
+          none has run on arm64 hardware.
+
+          Nothing in this release is verified beyond the entries in evidence/, and each entry names the exact build
+          it used, which may be older than these files.
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "blackice ${VERSION}" --notes-file "${RUNNER_TEMP}/notes.md" ./*

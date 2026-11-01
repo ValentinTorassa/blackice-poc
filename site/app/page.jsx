@@ -8,54 +8,52 @@ import Layers from '../components/Layers';
 import CubeMark from '../components/CubeMark';
 import StatusCards from '../components/StatusCards';
 import Corners from '../components/Corners';
+import DemoVideo from '../components/DemoVideo';
+import Walkthrough from '../components/Walkthrough';
+import Install from '../components/Install';
+import { RELEASE } from '../content/site';
 import { IsoScope, IsoPolicy, IsoReceipt } from '../components/Iso';
 import {
   Logo,
-  IconArrowInto,
   IconArrowRight,
   IconBook,
+  IconArrowInto,
   IconCommand,
-  IconGitHub,
+  IconFlag,
   IconLines,
   IconNarrow,
+  IconGitHub,
   IconNested,
   IconPenguin,
   IconPolicy,
   IconReceipt,
   IconScale,
   IconTerminal,
-  IconWrap,
 } from '../components/Icons';
 import { SITE } from '../content/site';
+import { DEMO, WALKTHROUGH } from '../content/demo';
 import { CHECKPOINTS } from '../content/status';
-import { recordedCheckpoints } from '../lib/evidence';
+import { findingsCheckpoints, recordedCheckpoints } from '../lib/evidence';
 
 const NOUNS = [
   {
     name: 'Scope',
     Icon: IconNested,
     Art: IsoScope,
-    text: 'Where a policy applies: a task and every process it starts, an app on the machine, or the host.',
+    text: 'What a policy applies to: one command and everything it starts, an app on the machine, or the whole host.',
   },
   {
     name: 'Policy',
     Icon: IconPolicy,
     Art: IsoPolicy,
-    text: 'Deny by default, with allow lists for names, subnets and ports. Every resolved address is checked again.',
+    text: 'A JSON file. Anything it doesn\'t allow by name, subnet or port is refused, and every address a name resolves to is checked too.',
   },
   {
     name: 'Receipt',
     Icon: IconReceipt,
     Art: IsoReceipt,
-    text: 'One flat JSON line per decision: the scope, the policy and its generation, where it was enforced, and why.',
+    text: 'Flat JSON lines with a stable reason code: which scope, which version of the policy, where it was enforced, and why. tail, grep and jq work on them.',
   },
-];
-
-const PRINCIPLES = [
-  { name: 'Born inside', Icon: IconArrowInto, text: 'The policy attaches before exec, like chroot. The first connection already runs inside it.' },
-  { name: 'Only narrows', Icon: IconNarrow, text: 'Anything can tighten a scope. Widening comes from the owner, outside the task, for a set time.' },
-  { name: 'Wraps any command', Icon: IconWrap, text: 'Goes in front of a command, like nice or timeout. Wrapping fx needs no changes to it.' },
-  { name: 'Plain text out', Icon: IconLines, text: 'Receipts are JSON lines, so tail, grep and jq just work.' },
 ];
 
 const SESSION = [
@@ -65,12 +63,38 @@ const SESSION = [
   ['ok', '200'],
   ['cmd', 'curl -sS https://paste.example'],
   ['deny', 'curl: (56) CONNECT tunnel failed, response 403'],
-  ['cmd', `${SITE.name} grant s-7f3a91c2 api.example.com --for 10m`, 'another terminal, as the owner'],
-  ['out', 'granted until 12:10:03'],
+  ['cmd', "tail -1 ~/.local/state/blackice/scopes/s-7f3a91c2/receipts.jsonl | jq -c '{verdict,reason,host}'", 'as the owner'],
+  ['out', '{"verdict":"deny","reason":"no_matching_rule","host":"paste.example"}'],
+  ['cmd', `${SITE.name} grant s-7f3a91c2 api.example.com --for 10m`, 'as the owner'],
+  ['out', 'granted api.example.com to scope s-7f3a91c2 until 2026-10-30T12:10:03.000Z'],
+];
+
+const UNIX = [
+  {
+    name: 'chroot',
+    Icon: IconArrowInto,
+    text: 'A chroot is set before the program runs. So is the policy: it is in place before the command runs its first instruction, so even its first connection is checked.',
+  },
+  {
+    name: 'pledge(2)',
+    Icon: IconNarrow,
+    text: 'After pledge, a process can only give up access. Inside a scope it is the same: nothing can get more. The owner can widen it from outside, until a set time.',
+  },
+  {
+    name: 'Rule of Repair',
+    Icon: IconFlag,
+    text: "Fail noisily and as soon as possible. If the policy doesn't load, or doesn't match its pinned hash, the command never starts.",
+  },
+  {
+    name: 'Everything is a file',
+    Icon: IconLines,
+    text: 'The policy is a file, and each logged decision is a line appended to another one. grep and jq work on both, and tail -f follows the receipts.',
+  },
 ];
 
 export default function Home() {
   const recorded = recordedCheckpoints();
+  const findings = findingsCheckpoints();
 
   return (
     <>
@@ -82,16 +106,20 @@ export default function Home() {
           <div className="container hero-inner">
             <Link href="/docs/status/" className="pill">
               <span className="pill-dot" aria-hidden="true" />
-              Proof of concept · macOS and Linux
+              v0 · Status
               <IconArrowRight size={13} className="pill-arrow" />
             </Link>
             <h1>
               Network permissions <br className="br" />
-              for apps and tasks.
+              for tasks, and soon apps.
             </h1>
             <p className="lede">
-              A native, headless policy that attaches before a task starts. Every child process inherits it. A process
-              inside can&apos;t grant itself more access.
+              blackice decides which hosts a command can reach, along with every process it starts. The rules are in
+              place before the command runs, and nothing inside can loosen them.
+            </p>
+            <p className="hero-status">
+              Task scopes work today on macOS (Apple silicon) and Debian 13 (x86_64). The macOS app filter is built in its pull
+              request and needs Developer ID signing to run. The Linux app filter is in review.
             </p>
             <CopyCommand command={SITE.command} />
             <div className="actions">
@@ -111,7 +139,7 @@ export default function Home() {
               </li>
               <li>
                 <IconPenguin size={14} />
-                Linux
+                Debian 13
               </li>
               <li>
                 <IconTerminal size={14} />
@@ -157,10 +185,36 @@ export default function Home() {
           <p className="caption">Illustration with simulated traffic.</p>
         </section>
 
+        <section className="container section about" aria-labelledby="about-title">
+          <div className={WALKTHROUGH.length ? 'about-grid' : undefined}>
+            <div className="about-text">
+              <h2 className="h2" id="about-title">
+                Why I built it
+              </h2>
+              <p className="sub">
+                I'm <a href={SITE.authorUrl}>Valen Torassa</a>, a security and backend engineer in Rosario, Argentina. Most
+                days an AI agent runs commands on my machine: tests, package installs, scripts. Each of those runs with my
+                user's permissions, so any of them can connect to anywhere my user can reach.
+              </p>
+              <p className="sub">
+                I wanted that limit in a file I can review in a pull request, in place before the command starts. The
+                operating system lets the command connect only to a local proxy, and the proxy applies the file. My earlier
+                project,{' '}
+                <a href="https://github.com/ValentinTorassa/VT-Agent-Firewall">VT-Agent-Firewall</a>, checks which tools an
+                agent calls. blackice works one layer down, on the connections the commands themselves open.
+              </p>
+            </div>
+            {WALKTHROUGH.length ? (
+              <div className="about-video">
+                <Walkthrough cuts={WALKTHROUGH} />
+              </div>
+            ) : null}
+          </div>
+        </section>
+
         <section className="container section">
-          <p className="eyebrow">Model</p>
-          <h2 className="h2">Three nouns.</h2>
-          <p className="sub">The same model covers a command an agent runs and an app already on the machine.</p>
+          <h2 className="h2">How it works</h2>
+          <p className="sub">Tasks and apps use the same model: a scope, a policy and receipts.</p>
           <Spotlight className="nouns" tilt>
             {NOUNS.map(({ name, Icon, Art, text }, i) => (
               <article className="noun spot" key={name}>
@@ -182,34 +236,31 @@ export default function Home() {
 
         <section className="container section">
           <div className="head-row">
-            <div>
-              <p className="eyebrow">Design</p>
-              <h2 className="h2">Where a connection is decided.</h2>
-            </div>
-            <span className="badge">Proposed for v0 · not verified</span>
+            <h2 className="h2">Design</h2>
+            <span className="badge">v0</span>
           </div>
           <p className="sub">
-            Every connection passes the same layers. The first one that refuses it is where it stops, and the decision
-            leaves a receipt.
+            Each connection passes these layers in order and stops at the first one that refuses it. A hostname hides
+            the address behind it, so the proxy checks both: the name against the policy, then every address it
+            resolves to. The proxy writes a receipt for each of its decisions.
           </p>
           <Layers />
         </section>
 
         <section className="container section">
-          <p className="eyebrow">Session</p>
-          <h2 className="h2">One command in front of anything.</h2>
+          <h2 className="h2">A shell inside a scope</h2>
           <p className="sub">
-            A shell, a test run or fx. Everything started inside stays in the scope. Wider access comes from outside,
-            from the owner, and ends on its own.
+            It goes in front of a command the way nice or timeout do: a shell, a test run or fx. Everything started
+            inside stays in the scope. From another terminal, the owner can read the receipts and allow more, and that
+            access expires on its own.
           </p>
-          <TypedTerminal lines={SESSION} title="~/project" badge="Illustrative · CLI not frozen" />
+          <TypedTerminal lines={SESSION} title="~/project" badge="Example · the CLI may change" />
         </section>
 
         <section className="container section">
-          <p className="eyebrow">Principles</p>
-          <h2 className="h2">Old Unix rules, applied to the network.</h2>
+          <h2 className="h2">Borrowed from Unix</h2>
           <Spotlight className="grid4">
-            {PRINCIPLES.map(({ name, Icon, text }) => (
+            {UNIX.map(({ name, Icon, text }) => (
               <div className="cell spot" key={name}>
                 <span className="cell-icon">
                   <Icon size={18} />
@@ -224,15 +275,13 @@ export default function Home() {
 
         <section className="container section">
           <div className="head-row">
-            <div>
-              <p className="eyebrow">Status</p>
-              <h2 className="h2">Nothing counts as working without a recorded run.</h2>
-            </div>
+            <h2 className="h2">What works today</h2>
             <Link className="link" href="/docs/status/">
               Status page
               <IconArrowRight size={14} />
             </Link>
           </div>
+          <p className="sub">A part is marked Tested only when a recorded run in the repository backs it.</p>
           <div className="progress">
             <p className="progress-top">
               <span className="progress-count">
@@ -243,13 +292,15 @@ export default function Home() {
             </p>
             <ol className="segments">
               {CHECKPOINTS.map(([id, name]) => {
-                const on = recorded.has(id);
+                // Same states as /docs/status: an entry that says it is a run, not a pass, is not lit like one.
+                const state = !recorded.has(id) ? 'pending' : findings.has(id) ? 'findings' : 'on';
+                const label = { pending: 'no entry yet', findings: 'recorded, with findings', on: 'recorded' }[state];
                 return (
-                  <li key={id} className={on ? 'on' : undefined} title={`${id} · ${name} · ${on ? 'recorded' : 'not run'}`}>
+                  <li key={id} className={state === 'pending' ? undefined : state} title={`${id} · ${name} · ${label}`}>
                     <span className="seg" />
                     <span className="seg-id">{id.slice(3)}</span>
                     <span className="sr-only">
-                      {id} {name}: {on ? 'recorded' : 'not run'}
+                      {id} {name}: {label}
                     </span>
                   </li>
                 );
@@ -259,13 +310,40 @@ export default function Home() {
           <StatusCards />
         </section>
 
+        <section className="container section" id="install" aria-labelledby="install-title">
+          <div className="head-row">
+            <h2 className="h2" id="install-title">
+              Install
+            </h2>
+            <a className="link" href={RELEASE.url}>
+              v{RELEASE.version} release notes
+              <IconArrowRight size={14} />
+            </a>
+          </div>
+          <p className="sub">
+            v{RELEASE.version} is the first release. It is v0 and not ready for production. Each platform's CLI is one
+            file attached to the release. Verify it before running it.
+          </p>
+          <Install />
+        </section>
+
+        {DEMO.length ? (
+          <section className="container section" id="demo" aria-labelledby="demo-title">
+            <h2 className="h2" id="demo-title">
+              Demo
+            </h2>
+            <DemoVideo sources={DEMO} title="fx demo · 1 min" />
+            <p className="caption">Recorded on macOS. Each demo carries a label that says what it shows.</p>
+          </section>
+        ) : null}
+
         <section className="container section">
           <div className="cta">
             <CubeMark />
-            <h2 className="h2">Follow the proof.</h2>
+            <h2 className="h2">Try it and tell me what broke</h2>
             <p className="sub">
-              The design, its limits and every checkpoint are public. Evidence lands in the repository as each run is
-              recorded.
+              The code, the design, its limits and the evidence for each checkpoint are in the repository. If something
+              doesn't behave the way this page says, open an issue.
             </p>
             <div className="actions">
               <Link className="btn btn-primary" href="/docs/">

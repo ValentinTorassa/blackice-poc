@@ -1,0 +1,4 @@
+{"ts":"2026-10-30T17:20:15.117Z","scope":"s-1ef6b744","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_start","detail":"backend linux-cgroup-bpf; command bash; proxy port 33759; 2 protected files"}
+{"ts":"2026-10-30T17:20:15.166Z","scope":"s-1ef6b744","policy":"b28c9f29dbea","gen":1,"point":"kernel","event":"backend_armed","reason":"linux_cgroup_bpf","detail":"cgroup_sock_addr; landlock_abi6; seccomp; protected_paths; private_mounts"}
+{"ts":"2026-10-30T17:20:15.167Z","scope":"s-1ef6b744","policy":"b28c9f29dbea","gen":1,"point":"kernel","event":"backend_cleanup","reason":"cgroup_removed","detail":"cgroup_empty_and_removed"}
+{"ts":"2026-10-30T17:20:15.168Z","scope":"s-1ef6b744","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_end","status":137,"dropped":0}

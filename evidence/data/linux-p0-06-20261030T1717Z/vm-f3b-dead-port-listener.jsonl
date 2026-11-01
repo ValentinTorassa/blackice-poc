@@ -1,0 +1,3 @@
+{"event": "bind", "port": 60313, "t": 1793381405.0447683}
+{"event": "accepted", "peer": ["127.0.0.1", 36334], "first_bytes": "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nUser-Agent: curl/8.14.1\r\nProxy-Connection: Keep-Alive\r\n\r\n", "t": 1793381419.9534266}
+{"event": "accepted", "peer": ["127.0.0.1", 51250], "first_bytes": "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nUser-Agent: curl/8.14.1\r\nProxy-Connection: Keep-Alive\r\n\r\n", "t": 1793381434.9649444}

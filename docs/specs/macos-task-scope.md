@@ -2,7 +2,7 @@
 id: macos-task-scope
 title: macOS task scope (experimental)
 owner: lead
-stage: poc
+stage: v0
 paths: src/macos/seatbelt.zig, src/core/backend.zig
 cases: P0-01, P0-02, P0-08, P0-10
 depends: policy, proxy, receipts

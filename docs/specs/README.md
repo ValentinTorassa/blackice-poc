@@ -24,9 +24,9 @@ Specs describe the product. They do not hold plans, schedules or discussion.
 id: proxy                  # file name without .md; lowercase, dashes
 title: Proxy
 owner: lead                # who builds it: lead | codex | codex-linux | network | appfilter | security | marketing | spec; comma-separated if shared
-stage: poc                 # poc: needed for the proof of concept; release: needed later
+stage: v0                  # v0: needed for the v0 checkpoints; release: needed later
 paths: src/proxy/          # code that implements it, comma-separated; empty if none yet
-cases: P0-02, P0-03        # proof-of-concept checkpoints it serves (see evidence/README.md)
+cases: P0-02, P0-03        # v0 checkpoints it serves (see evidence/README.md)
 depends: policy, receipts  # other specs it relies on
 ---
 ```
@@ -123,7 +123,7 @@ Nobody types it. In order of precedence:
 
 A requirement shows `verified` (an entry exists), `tested` (a test exists), `probe only` or `open`.
 
-A component with `stage: release` is not part of the proof of concept. It shows as `pending` until it is
+A component with `stage: release` is not part of the v0 checkpoints. It shows as `pending` until it is
 verified, whatever its tasks say.
 
 ## Writing rules

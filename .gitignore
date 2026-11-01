@@ -16,3 +16,6 @@ zig-out/
 site/node_modules/
 site/.next/
 site/out/
+
+# The demo video is added only at deploy time and never committed.
+site/public/demo/

@@ -1,5 +1,5 @@
 // Project status shown on the site. Cell states are computed when the site builds (lib/evidence.js):
-// "verified" needs a recorded run in evidence/, "built" needs the code in the repository.
+// "verified" (shown as Tested) needs a recorded run in evidence/, "built" needs the code in the repository.
 
 export const MATRIX = [
   {
@@ -8,26 +8,29 @@ export const MATRIX = [
       base: 'pending',
       code: 'macos',
       builtAs: 'unsigned',
-      how: 'A Network Extension filter that decides per app, by code-signing identity, and per destination, with the same policy and receipts. It cannot run until it is signed with a Developer ID.',
+      how: 'A Network Extension filter that decides per app, by code signature, and per destination, with the same policies and receipts. It can\'t run until it is signed with an Apple Developer ID.',
     },
     tasks: {
       base: 'designed',
       code: 'src/macos',
       evidence: /^P0-02-.*macos/i,
-      how: 'Experimental session mode: the built-in sandbox lets the command reach only a local proxy, which applies the policy.',
+      how: 'Experimental. The built-in macOS sandbox lets the command reach only a local proxy, which applies the policy.',
     },
   },
   {
     os: 'Linux',
     apps: {
       base: 'pending',
-      how: 'Host-wide control with trustworthy process attribution. The mechanism will be chosen after a spike.',
+      how: 'Per-app control across the whole machine, which needs a reliable way to tell which app opened each connection. A first build is in review, not cleared, and runs only in a virtual machine so far.',
     },
     tasks: {
       base: 'designed',
-      code: 'src/linux',
+      // main holds a placeholder backend.zig (available = false) until the real Linux backend lands.
+      code: 'src/linux/backend.zig',
+      builtWhen: /^pub const available = true;/m,
       evidence: /^P0-02-.*linux/i,
       how: 'A cgroup v2 per task, with eBPF programs that let the command reach only a local proxy, which applies the policy.',
+      note: 'Tested on Debian 13 (kernel 6.12). On Ubuntu 24.04 and later, where kernel.apparmor_restrict_unprivileged_userns=1 is the default, scopes are expected to fail closed (not tested on Ubuntu).',
     },
   },
 ];
@@ -63,7 +66,7 @@ export const INVARIANTS = [
 export const STATE_LABEL = {
   pending: 'Pending',
   designed: 'Designed',
-  built: 'Built, not verified',
+  built: 'Built, not tested',
   unsigned: 'Built, unsigned',
-  verified: 'Verified',
+  verified: 'Tested',
 };

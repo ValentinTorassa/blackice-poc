@@ -1,0 +1,12 @@
+start 17:29:59.929 pid 1337 HTTPS_PROXY=http://127.0.0.1:60313 cgroup=0::/blackice/s-54ebb173
+r1 17:30:19.932
+curl: (56) Proxy CONNECT aborted
+r1 via HTTPS_PROXY: http 000
+r1 curl exit 56
+r2 17:30:34.959 second scope's proxy port=51065
+curl: (56) Proxy CONNECT aborted
+r2 via HTTPS_PROXY: http 000
+r2 own-port curl exit 56
+curl: (7) Failed to connect to 127.0.0.1 port 51065 after 0 ms: Could not connect to server
+r2 via the second scope's proxy: http 000
+r2 second-port curl exit 7

@@ -2,7 +2,7 @@
 id: scope-core
 title: Task scope core
 owner: lead
-stage: poc
+stage: v0
 paths: src/main.zig, src/core/scope.zig, src/core/backend.zig
 cases: P0-01, P0-02, P0-09, P0-10
 depends: policy, receipts, proxy
@@ -85,20 +85,25 @@ loopback ports; names and addresses are then decided by the proxy.
 | `blackice run`: arguments, policy load, scope creation, launch, exit status (PR #7) | lead | done | |
 | Write the policy bytes into the state directory | lead | done | |
 | State directory read-only inside the scope on macOS, parents protected against rename | lead | done | |
-| State directory read-only or hidden inside the scope on Linux (PR #6, 89a5f49) | codex-linux | done | |
+| State directory read-only or hidden inside the scope on Linux (PR #6) | codex-linux | done | |
 | Proxy variables and the clean environment | lead | done | |
 | `scope_start` and `scope_end` receipts, with the failed-write count | lead | done | |
 | Decide and document what happens to processes left running after CMD exits | lead | todo | |
 | Protected paths (`protected_paths` in the launch contract, `--protect`, symlink components) and `--policy-sha256`; macOS honors them (PR #7, b958046) | lead | done | |
-| Linux backend honors protected paths (`protects_paths = true`), helper protocol v2 (PR #6, 89a5f49; reviewed safe, pinned at 35ae1f8) | codex-linux | done | |
+| Linux backend honors protected paths (`protects_paths = true`), helper protocol v2 (PR #6; reviewed and pinned) | codex-linux | done | |
 | Create each scope's state directory exclusively (0700), with a new id on a clash | lead | done | |
+| `run` handles INT, TERM and HUP: cancel through the backend, wait for its cleanup, write `scope_end` as cancelled. Today SIGTERM and Ctrl-C leave no `scope_end` (P0-06 finding P6-2) | lead | todo | |
+| A helper or launch failure exits 125 (cannot set up the scope), not 127 (P0-06 finding P6-3) | lead | todo | |
 | Linux enforcing backend behind the same contract (PR #6, not merged; `run` refuses on Linux until it lands) | codex-linux | done | |
 
 ## Evidence
 
 | Covers | Kind | Link | Note |
 |---|---|---|---|
-| scope-core.R10, scope-core.R12 | test | `zig build test` at 35ae1f8 (PR #6), src/linux/protection_test.zig: "protected files, symlink entries and state ancestors resist mutation while neighbors remain writable", "pre-existing hard links and intermediate symlinks refuse protection before exec", "an existing alternate mount view refuses protection before exec", "stdio cannot retain protected inodes, state files or directory access through the old mount" | Linux side of protected paths and the state directory: writes, renames, hard links, other mount views and stdio refused in rootless fixtures, from a directory under `/tmp`. No installed helper and no sudo, so the privileged path is not exercised. 106/106 passed in my copy, Zig 0.17.0, Debian 13 x86_64 |
+| scope-core.R1, scope-core.R2, scope-core.R13 | entry | [P0-01 Linux](../../evidence/P0-01-policy-before-exec-linux.md) | Debian 13, kernel 6.12.113, x86_64, launcher 020f389, helper 7c3bcff (`515ebfac…`), Zig 0.17.0, one run. An invalid policy and a hash mismatch each exited 125 with no scope directory, no receipts and no command marker; the valid command saw its policy before doing work |
+| scope-core.R5 | entry | [P0-02 Linux](../../evidence/P0-02-real-deny-linux.md) | Debian 13, kernel 6.12.113, x86_64, launcher 020f389, helper 7c3bcff (`515ebfac…`), Zig 0.17.0, one run. Direct TCP and UDP over IPv4 and IPv6 refused, also from a double-forked descendant |
+| scope-core.R4, scope-core.R6, scope-core.R10, scope-core.R11, scope-core.R12 | entry | [P0-03 Linux](../../evidence/P0-03-explicit-allow-linux.md) | Same launcher and helper, one run. Scope directory 700 and receipts 600; `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` set; appending to its own or another scope's receipts failed (`Read-only file system`); a synthetic secret from the caller's environment was absent; writing or renaming blackice, the policy and a `--protect` file failed, and all three were unchanged |
+| scope-core.R10, scope-core.R12 | test | `zig build test` on an earlier build of PR #6, src/linux/protection_test.zig: "protected files, symlink entries and state ancestors resist mutation while neighbors remain writable", "pre-existing hard links and intermediate symlinks refuse protection before exec", "an existing alternate mount view refuses protection before exec", "stdio cannot retain protected inodes, state files or directory access through the old mount" | Linux side of protected paths and the state directory: writes, renames, hard links, other mount views and stdio refused in rootless fixtures, from a directory under `/tmp`. No installed helper and no sudo, so the privileged path is not exercised. 106/106 passed in my copy, Zig 0.17.0, Debian 13 x86_64 |
 | scope-core.R11, scope-core.R12 | entry | [P0-07 macOS, scripted model](../../evidence/P0-07-fx-hook-scripted-macos.md) | macOS 27.0.1 arm64, SIP on, blackice claude/run 58e73cc, fx v0.0.16 with the hook patch at 08e34f3, scripted model, PR #11. `FAKE_SECRET` from fx's environment was absent in the scope and `AI_AGENT` passed; writes to blackice, the policy, fx and a `--protect`ed profile file, and renames of `bin/` and the policy, were all refused, with hashes unchanged |
 | scope-core.R1, scope-core.R2, scope-core.R13 | entry | [P0-01 macOS](../../evidence/P0-01-policy-before-exec-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58e73cc, Zig 0.17.0, one run, PR #11. A policy with the allow entry `*`, and a `--policy-sha256` that did not match, each stopped blackice before the command: exit 125, no scope, no marker file. The command's first network call was refused |
 | scope-core.R5 | entry | [P0-02 macOS](../../evidence/P0-02-real-deny-macos.md) | macOS 27.0.1 arm64, SIP on, claude/run 58e73cc, Zig 0.17.0, one run, PR #11. Direct TCP and UDP, IPv4 and IPv6, from python3 and curl refused by the kernel; the same scope reached example.com through its proxy |

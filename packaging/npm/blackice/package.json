@@ -1,0 +1,37 @@
+{
+  "name": "@legios/blackice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local network permissions for apps and agent tasks",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ValentinTorassa/blackice.git",
+    "directory": "packaging/npm"
+  },
+  "bin": {
+    "blackice": "bin/blackice.cjs"
+  },
+  "files": [
+    "bin/blackice.cjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "optionalDependencies": {
+    "@legios/blackice-darwin-arm64": "0.1.0",
+    "@legios/blackice-darwin-x64": "0.1.0",
+    "@legios/blackice-linux-x64": "0.1.0",
+    "@legios/blackice-linux-arm64": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "blackicePlatforms": {
+    "darwin-arm64": "@legios/blackice-darwin-arm64",
+    "darwin-x64": "@legios/blackice-darwin-x64",
+    "linux-x64": "@legios/blackice-linux-x64",
+    "linux-arm64": "@legios/blackice-linux-arm64"
+  }
+}

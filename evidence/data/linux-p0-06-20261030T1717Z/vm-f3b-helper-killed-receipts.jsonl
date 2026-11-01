@@ -1,0 +1,5 @@
+{"ts":"2026-10-30T17:29:59.901Z","scope":"s-54ebb173","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_start","detail":"backend linux-cgroup-bpf; command bash; proxy port 60313; 2 protected files"}
+{"ts":"2026-10-30T17:29:59.924Z","scope":"s-54ebb173","policy":"b28c9f29dbea","gen":1,"point":"kernel","event":"backend_armed","reason":"linux_cgroup_bpf","detail":"cgroup_sock_addr; landlock_abi6; seccomp; protected_paths; private_mounts"}
+{"ts":"2026-10-30T17:30:04.968Z","scope":"s-54ebb173","policy":"b28c9f29dbea","gen":1,"point":"control","event":"warning","verdict":"deny","reason":"linux_launch_refused","detail":"HelperFailed"}
+{"ts":"2026-10-30T17:30:04.968Z","scope":"s-54ebb173","policy":"b28c9f29dbea","gen":1,"point":"control","event":"warning","reason":"command_not_started","detail":"SpawnFailed"}
+{"ts":"2026-10-30T17:30:04.968Z","scope":"s-54ebb173","policy":"b28c9f29dbea","gen":1,"point":"control","event":"scope_end","status":127,"detail":"command_not_started","dropped":0}

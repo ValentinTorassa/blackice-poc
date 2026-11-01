@@ -2,7 +2,7 @@
 id: example
 title: Example
 owner: lead
-stage: poc
+stage: v0
 paths:
 cases:
 depends:

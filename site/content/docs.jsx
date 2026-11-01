@@ -1,13 +1,12 @@
 import Link from 'next/link';
-import { SITE } from './site';
+import { RELEASE, SITE } from './site';
 import { CHECKPOINTS, INVARIANTS } from './status';
 import { highlight } from './highlight';
 import CopyButton from '../components/CopyButton';
 import StatusCards from '../components/StatusCards';
 import { IconArrowRight, IconFlag, IconInfo, IconNested, IconPolicy, IconTerminal } from '../components/Icons';
 
-// Docs content for the v0 design. Nothing is verified until evidence/ says so.
-// Parts with code in the repository are in the present tense; parts not built yet are in the future tense.
+// Docs content for v0. States come from status.js and evidence/, never typed here.
 
 function textOf(node) {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
@@ -86,15 +85,23 @@ const POLICY_EXAMPLE = `{
   }
 }`;
 
-const RECEIPT_EXAMPLE = `{"ts":"2026-10-30T12:00:03.120Z","scope":"${SCOPE}","policy":"cae35a3beb20","gen":1,"point":"proxy","event":"connect","verdict":"allow","reason":"allowed_by_rule","rule":"registry.npmjs.org","host":"registry.npmjs.org","ip":"198.51.100.24","port":443}
-{"ts":"2026-10-30T12:00:04.871Z","scope":"${SCOPE}","policy":"cae35a3beb20","gen":1,"point":"proxy","event":"connect","verdict":"deny","reason":"no_matching_rule","host":"paste.example","port":443}`;
+const RECEIPT_EXAMPLE = `{"ts":"2026-10-30T14:36:01.279Z","scope":"s-1b1f4870","policy":"353b7e8328f9","gen":1,"point":"proxy","event":"connect","verdict":"allow","reason":"allowed_by_rule","rule":"example.com","host":"example.com","ip":"104.20.23.154","port":443,"detail":"sni_match"}
+{"ts":"2026-10-30T14:36:01.427Z","scope":"s-f79c31a5","policy":"353b7e8328f9","gen":1,"point":"proxy","event":"connect","verdict":"deny","reason":"no_matching_rule","host":"github.com","port":443}`;
+
+// v0 checkpoint states, from evidence/ (lib/evidence.js).
+const CHECKPOINT_LABEL = { recorded: 'Recorded', findings: 'Recorded, with findings', pending: 'No entry yet' };
+
+function checkpointState(id, recordedSet, findingsSet) {
+  if (!recordedSet.has(id)) return 'pending';
+  return findingsSet && findingsSet.has(id) ? 'findings' : 'recorded';
+}
 
 const RECEIPT_FIELDS = [
-  ['ts', 'Time of the decision, in UTC.'],
+  ['ts', 'When the line was written, in UTC. For a kernel refusal, that can be after the refusal itself.'],
   ['scope', 'The scope ID.'],
   ['policy, gen', 'A short hash of the policy and its generation.'],
   ['point', 'Where it was enforced: proxy, kernel, relay, control or app_filter.'],
-  ['event', 'connect, http, scope_start, scope_end, grant, revoke, relay_call, kernel_drop or warning.'],
+  ['event', 'scope_start, backend_armed, connect, http, grant, revoke, relay_call, kernel_drop, warning or scope_end.'],
   ['verdict, reason', 'allow or deny, and a stable reason code.'],
   ['rule', 'The policy entry that decided, as written in the file.'],
   ['host, ip, port, detail', 'The destination, and anything else worth keeping.'],
@@ -132,7 +139,7 @@ const NEXT = [
   ['/docs/scopes/', 'Scopes', 'Where a policy applies.', IconNested],
   ['/docs/policies/', 'Policies', 'What may connect, and how names and addresses are checked.', IconPolicy],
   ['/docs/fx/', 'fx integration', 'A scope for every command fx runs, or one around the whole agent.', IconTerminal],
-  ['/docs/limits/', 'Limits', 'What it does not do, declared up front.', IconFlag],
+  ['/docs/limits/', 'Limits', 'What it does not do.', IconFlag],
 ];
 
 function Codes({ label, codes, tone }) {
@@ -155,26 +162,30 @@ export const DOCS = [
     slug: '',
     group: 'Overview',
     title: 'Introduction',
-    description: `${SITE.name} gives apps and agent tasks network permissions on macOS and Linux. It is native, headless and driven by a policy file.`,
+    description: `${SITE.name} gives each task its own network permissions, decided by a policy file; apps are next. v0: task scopes work on macOS (experimental) and Debian 13 (x86_64).`,
     body: ({ recorded }) => (
       <>
         <Note>
-          <strong>Proof of concept.</strong> Nothing in these docs is verified yet. {recorded} of {CHECKPOINTS.length}{' '}
-          checkpoints have recorded evidence; see <Link href="/docs/status/">Status</Link>. Parts that are not built yet
-          are written in the future tense.
+          <strong>v0, not production-ready.</strong> {recorded} of {CHECKPOINTS.length} checkpoints have recorded
+          evidence; see <Link href="/docs/status/">Status</Link>.
         </Note>
         <p>
-          A coding agent runs commands on your machine: tests, installs, scripts. Each of those commands can connect
-          anywhere your user can. {SITE.name} will put a network policy around a task before it starts. Every process
-          the task spawns will inherit that policy, and no process inside the task will be able to grant itself more
-          access.
+          {SITE.name} gives each task its own network permissions, decided by a policy file, and apps are next. Task
+          scopes run natively on macOS (experimental) and Debian 13 (x86_64), headless, with no per-connection
+          prompts.
         </p>
         <p>
-          The same policy format will cover apps that are already running on the machine. A host ceiling will sit over
-          everything, and nested scopes will only be able to narrow it.
+          Today it works for tasks. A coding agent runs commands on your machine: tests, installs, scripts. Each of
+          those commands can connect anywhere your user can. {SITE.name} puts a network policy around a task before it
+          starts. Every process the task spawns inherits that policy, and no process inside the task can grant itself
+          more access.
         </p>
-        <H2>Quick look</H2>
-        <Code title="terminal" label="Illustrative · CLI not frozen">{`$ ${SITE.name} run --policy policy.json -- fx
+        <p>
+          The same policy format will cover apps that are already on the machine, and a host ceiling will sit over
+          everything. Nested scopes will only be able to narrow it.
+        </p>
+        <H2>Example</H2>
+        <Code title="terminal" label="Illustrative">{`$ ${SITE.name} run --policy policy.json -- npm ci
 # from outside the scope, as the owner:
 $ ${SITE.name} grant ${SCOPE} api.example.com --for 10m
 $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
@@ -197,40 +208,106 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
     ),
   },
   {
+    slug: 'install',
+    group: 'Overview',
+    title: 'Install',
+    description: `Download the ${SITE.name} CLI from the v0.1.0 release and verify it. On Debian 13, task scopes also need a helper, set up separately with sudo.`,
+    // Same wording as the Install and Verify sections of the v0.1.0 release notes.
+    body: () => (
+      <>
+        <Note>
+          <strong>v{RELEASE.version}</strong> is the first release. It is v0 and not ready for production.
+        </Note>
+        <H2>Download</H2>
+        <p>
+          Each platform's CLI is one file attached to the <a href={RELEASE.url}>v{RELEASE.version} release</a>. Verify
+          it as described below before running it. npm and Homebrew packages are not published yet.
+        </p>
+        <H2>Verify</H2>
+        <p>
+          Two builders (Linux and macOS runners) produced byte-identical files: Zig 0.17.0, ReleaseSafe, stripped, macOS
+          minimum 13.0. Before running a file:
+        </p>
+        <ol>
+          <li>
+            Integrity. On macOS, use <code>{RELEASE.integrityMac}</code>.
+            <Code title="terminal">{`$ ${RELEASE.integrity}`}</Code>
+          </li>
+          <li>
+            Provenance, with GitHub CLI 2.49 or later.
+            <Code title="terminal">{`$ ${RELEASE.provenance}`}</Code>
+          </li>
+          <li>
+            Independence: check out v{RELEASE.version}, install Zig 0.17.0, run{' '}
+            <code>zig build release -Dmacos-min=13.0</code>, and compare the hashes.
+          </li>
+        </ol>
+        <H2>Linux helper</H2>
+        <p>
+          On Debian 13 x86_64, task scopes also need the helper, set up from a checkout of v{RELEASE.version}. You verify
+          the release, build the helper, check its hash against <code>SHA256SUMS</code> and run the setup script with
+          sudo, again after each reboot. The steps are in <a href={RELEASE.linuxSetup}>docs/linux.md</a>.
+        </p>
+        <p>
+          The helper keeps four file capabilities (<code>CAP_CHOWN</code>, <code>CAP_DAC_OVERRIDE</code>,{' '}
+          <code>CAP_NET_ADMIN</code> and <code>CAP_BPF</code>). Only root and the primary group of the user named at setup
+          can run it, and <code>sudo ./scripts/linux-teardown.sh</code> removes it.
+        </p>
+        <H2>Other platforms</H2>
+        <p>
+          Intel Macs and Linux arm64 get a CLI build, but task scopes have not been shown on them. Linux arm64 has no
+          helper yet, so scopes do not run there. Other Linux distributions are untested. On Ubuntu 24.04 and later,
+          where <code>kernel.apparmor_restrict_unprivileged_userns=1</code> is the default, scopes are expected to fail
+          closed.
+        </p>
+      </>
+    ),
+  },
+  {
     slug: 'status',
     group: 'Overview',
     title: 'Status',
-    description: 'What exists, what is being tested, and how a claim earns the word "verified".',
-    body: ({ recordedSet }) => (
+    description: 'What works today and what is still in progress.',
+    body: ({ recordedSet, findingsSet, entries }) => (
       <>
         <p>
-          The first usable release needs app control and task control on both macOS and Linux. Each of the four cells
-          has its own evidence gate: a shared command does not mean equal coverage. States are computed when this site
-          is built. <strong>Verified</strong> needs a recorded run in <code>evidence/</code>; <strong>Built</strong>{' '}
-          means the code is in the repository.
+          States are computed when this site is built. <strong>Tested</strong> needs a recorded run in{' '}
+          <code>evidence/</code>; <strong>Built</strong> means the code is in the repository.
         </p>
         <StatusCards />
-        <H2>PoC-0 checkpoints</H2>
-        <p>
-          A checkpoint is recorded only when the repository&apos;s <code>evidence/</code> folder holds its test record.
-        </p>
+        <H2>v0 checkpoints</H2>
         <ol className="checklist">
           {CHECKPOINTS.map(([id, name]) => (
             <li key={id}>
               <span className="mono faint">{id}</span>
-              <span>{name}</span>
-              <span className={`state state-${recordedSet.has(id) ? 'verified' : 'pending'}`}>
+              <span>
+                {name}
+                {entries.has(id) && (
+                  <span className="entries">
+                    {entries.get(id).map((e) => (
+                      <a key={e.file} href={`${SITE.repo}/blob/main/evidence/${e.file}`}>
+                        {e.label}
+                      </a>
+                    ))}
+                  </span>
+                )}
+              </span>
+              <span className={`state state-${checkpointState(id, recordedSet, findingsSet)}`}>
                 <span className="state-dot" aria-hidden="true" />
-                {recordedSet.has(id) ? 'Recorded' : 'Not run'}
+                {CHECKPOINT_LABEL[checkpointState(id, recordedSet, findingsSet)]}
               </span>
             </li>
           ))}
         </ol>
+        <p className="checklist-legend">
+          <strong>Recorded</strong>: <code>evidence/</code> has an entry for the checkpoint.{' '}
+          <strong>Recorded, with findings</strong>: the entry says it is a run, not a pass, and lists what it found.
+        </p>
         <H2>Release gap</H2>
-        <p>Before a first usable release, beyond this proof of concept:</p>
+        <p>Before a first usable release, beyond v0:</p>
         <ul>
           <li>App control on macOS: the Network Extension filter, signed with a Developer ID.</li>
-          <li>App control on Linux: a mechanism chosen after a spike.</li>
+          <li>App control on Linux: a first build is in review, not cleared.</li>
           <li>Owner authentication for grants, beyond &quot;same user, outside every scope&quot;.</li>
           <li>Protocols other than HTTP and TLS through the proxy.</li>
           <li>Listening inside a scope, for dev servers and tests that open a port.</li>
@@ -241,7 +318,7 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
         <ol className="invariants">
           {INVARIANTS.map((text, i) => (
             <li key={text}>
-              <span className="mono faint">I-{String(i + 1).padStart(2, '0')}</span>
+              <span className="mono faint">{i + 1}</span>
               <span>{text}</span>
             </li>
           ))}
@@ -258,20 +335,20 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
       <>
         <H2>Task scope</H2>
         <p>
-          A command and every process it starts. {SITE.name} will create the scope and arm its policy before the
-          command executes, so the first connection the command makes is already inside it. Children inherit the scope
-          through fork and exec.
+          A command and every process it starts. {SITE.name} creates the scope and arms its policy before the command
+          executes, so the first connection the command makes is already inside it. Children inherit the scope through
+          fork and exec.
         </p>
         <p>
           Each scope has an ID, such as <code>{SCOPE}</code>, and a state directory under{' '}
-          <code>~/.local/state/{SITE.name}/scopes/</code>. Only the {SITE.name} process writes there; inside the scope
-          it will be read-only.
+          <code>~/.local/state/{SITE.name}/scopes/</code>. Only the {SITE.name} process writes there; inside a scope it
+          is read-only.
         </p>
         <H2>App scope</H2>
         <p>
           An app that is already on the machine. On macOS, a Network Extension filter will identify apps by their
           code-signing identity, not their process name, and apply the same policy format and receipts. App scopes will
-          not need {SITE.name} to launch the app. On Linux, the mechanism will be chosen after a spike.
+          not need {SITE.name} to launch the app. On Linux, a first build is in review, not cleared.
         </p>
         <H2>Host ceiling</H2>
         <p>One policy, administered by the owner, over the whole machine. Every other scope will sit under it.</p>
@@ -280,10 +357,6 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
           Scopes will nest, and a nested scope will only be able to narrow. The effective permission is the
           intersection of every ceiling that applies, so a narrower scope can never erase a mandatory deny.
         </p>
-        <Note>
-          Work handed to a system daemon on a task&apos;s behalf (launchd, <code>open</code>,{' '}
-          <code className="nb">systemd-run --user</code>, docker) does not run as a child of the task. It is outside the task scope.
-        </Note>
       </>
     ),
   },
@@ -311,7 +384,7 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
         </p>
         <H2>Addresses and DNS</H2>
         <p>
-          A command inside a scope will not reach the network directly. It will reach only a local proxy outside the
+          A command inside a scope does not reach the network directly. It reaches only a local proxy outside the
           scope, which matches the host name against the policy and resolves allowed names itself.
         </p>
         <p>
@@ -328,20 +401,21 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
         <H2>A strict file</H2>
         <p>
           Unknown fields are rejected, so a typo cannot widen a policy. If a backend cannot enforce something a policy
-          requires, activation will fail. Nothing is silently downgraded.
+          requires, activation fails. Nothing is silently downgraded.
         </p>
         <H2>Generations</H2>
         <p>
-          The policy will be loaded once, when the scope starts, and never read again from disk. Receipts name it by a
-          short hash and a generation number. A change, such as a grant, will commit as a new generation, all at once;
-          if it fails, the previous generation stays in force.
+          The policy is loaded once, when the scope starts, and never read again from disk. Receipts name it by a short
+          hash and a generation number. A policy change will commit as a new generation, all at once; if it fails, the
+          previous generation will stay in force. In v0 the generation stays at 1: a grant does not change it.
         </p>
         <H2>Vercel Sandbox</H2>
         <p>
-          An importer will read a tested subset of the{' '}
-          <a href="https://vercel.com/docs/sandbox/concepts/firewall">Vercel Sandbox network policy</a> and refuse what
-          v0 cannot express, such as <code>www.*.com</code> or a bare <code>*</code>. Fields outside that subset will be
-          rejected, not ignored.
+          An experimental importer reads a tested subset of the{' '}
+          <a href="https://vercel.com/docs/sandbox/concepts/firewall">Vercel Sandbox network policy</a> and refuses what
+          v0 cannot express, such as <code>www.*.com</code> or a bare <code>*</code>. Input outside that subset is
+          rejected, not ignored. It produces a candidate policy for review. It is not part of the CLI yet, and it is not
+          verified.
         </p>
       </>
     ),
@@ -353,23 +427,22 @@ $ tail -f ~/.local/state/${SITE.name}/scopes/${SCOPE}/receipts.jsonl`}</Code>
     description: 'Temporary access, given by the owner from outside the scope, that ends on its own.',
     body: () => (
       <>
-        <Code title="terminal · outside the scope" label="Illustrative · output not frozen">{`$ ${SITE.name} grant ${SCOPE} api.example.com --for 10m
+        <Code title="terminal · outside the scope" label="Illustrative">{`$ ${SITE.name} grant ${SCOPE} api.example.com --for 10m
 granted until 12:10:03`}</Code>
-        <Code title="terminal · inside the scope" label="Illustrative · output not frozen">{`$ ${SITE.name} grant ${SCOPE} api.example.com --for 10m
+        <Code title="terminal · inside the scope" label="Illustrative">{`$ ${SITE.name} grant ${SCOPE} api.example.com --for 10m
 error: the control socket is not reachable from inside a scope`}</Code>
         <H2>Who can grant</H2>
         <p>
-          Grants will travel over a control socket that the scope cannot reach: a sandbox rule on macOS, a mount
-          namespace on Linux. A process inside a task will not be able to widen its own scope or anyone else&apos;s.
-        </p>
-        <p>
-          In v0, any process of the same user outside every scope counts as the owner. That is a declared limit;
-          stronger owner checks, such as Touch ID or polkit, are an open question.
+          Grants travel over a control socket that the scope cannot reach. On macOS a sandbox rule keeps it out of
+          reach; on Linux the command cannot create a filesystem or abstract Unix socket, so it cannot connect to it. A
+          process inside a task cannot widen its own scope or anyone else&apos;s. In v0, any process of the same user
+          outside every scope counts as the owner.
         </p>
         <H2>When access ends</H2>
         <p>
-          At the earliest bound: the grant&apos;s timeout, the end of the task, or a revocation. Expiry will be enforced
-          locally. What a revocation covers, including connections that are already open, will be stated per backend.
+          At the earliest bound: the grant&apos;s timeout, the end of the task, or a revocation with{' '}
+          <code>{SITE.name} revoke</code>. Both are enforced locally, by the proxy: when a grant ends or is revoked, the
+          proxy resets the connections opened under it and refuses new ones.
         </p>
       </>
     ),
@@ -378,10 +451,10 @@ error: the control socket is not reachable from inside a scope`}</Code>
     slug: 'receipts',
     group: 'Concepts',
     title: 'Receipts',
-    description: 'One flat JSON line per decision, with a stable reason code.',
+    description: 'Flat JSON lines with a stable reason code.',
     body: () => (
       <>
-        <Code title="receipts.jsonl" label="Format v0 · simulated values">
+        <Code title="receipts.jsonl" label="From a run on Linux">
           {RECEIPT_EXAMPLE}
         </Code>
         <p>
@@ -446,8 +519,14 @@ error: the control socket is not reachable from inside a scope`}</Code>
         </p>
         <H2>Gaps</H2>
         <p>
-          Lines that could not be written are counted and reported when the scope ends, so a gap in the log is visible.
-          On Linux, lost kernel events will be counted the same way. A logging failure never widens access.
+          Lines that could not be written are counted and reported in the scope&apos;s last receipt,{' '}
+          <code>scope_end</code>, so a gap in the log is visible. If {SITE.name} itself exits before the scope
+          ends, there is no <code>scope_end</code> and the count is not reported.
+        </p>
+        <p>
+          On Linux, kernel refusals that overflow the scope&apos;s ring buffer are counted too, and the total is
+          reported when the scope ends. On macOS some refusals leave no receipt, and those are not counted; see{' '}
+          <Link href="/docs/limits/">Limits</Link>. A logging failure never widens access.
         </p>
         <H2>Privacy</H2>
         <p>Receipts stay on the machine. There is no account and no telemetry.</p>
@@ -458,27 +537,64 @@ error: the control socket is not reachable from inside a scope`}</Code>
     slug: 'cli',
     group: 'Reference',
     title: 'CLI',
-    description: 'The commands planned for v0. The contract is not frozen yet.',
+    description: 'The commands in v0. The contract is not frozen yet.',
     body: () => (
       <>
         <H2>
           <code>{SITE.name} run</code>
         </H2>
-        <Code>{`${SITE.name} run --policy <file> [--name <name>] -- <command> [args...]`}</Code>
+        <Code>{`${SITE.name} run --policy <file> [--policy-sha256 <hex>] [--protect <path>]... [--env <name>]...
+             [--relay --model <id>... [--upstream <url>] [--max-requests <n>]] -- <command> [args...]`}</Code>
         <p>
-          Will create a task scope, start its proxy outside the scope (and the model relay when asked), launch the
-          command confined, and write receipts to the scope&apos;s state directory. The command gets{' '}
-          <code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code> and <code>ALL_PROXY</code> pointing at the proxy.
+          Creates a task scope, starts its proxy and the owner&apos;s control socket outside the scope, and only then
+          launches the command, already confined. Receipts go to the scope&apos;s state directory. {SITE.name} never
+          starts the command without a backend that enforces the policy. On Linux, a scope whose helper is killed
+          while it runs is the exception; see <Link href="/docs/limits/">Limits</Link>.
+        </p>
+        <p>
+          The command gets a clean environment: a short list of variables such as <code>PATH</code> and{' '}
+          <code>HOME</code>, the ones named with <code>--env</code>, <code>BLACKICE_SCOPE</code>, and{' '}
+          <code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code> and <code>ALL_PROXY</code> pointing at the proxy. Nothing
+          else from the caller&apos;s environment passes.
+        </p>
+        <ul>
+          <li>
+            <code>--policy-sha256</code> pins the policy. If the file does not hash to that value, nothing runs.
+          </li>
+          <li>
+            <code>--protect</code> names a file, by absolute path, that the command cannot change, just as it cannot
+            change {SITE.name} itself or the policy.
+          </li>
+          <li>
+            <code>--relay</code> also starts the model relay, for the models named with <code>--model</code>. It reads
+            the provider key from stdin; the command gets only{' '}
+            <code>BLACKICE_RELAY_URL</code> and a per-scope <code>BLACKICE_RELAY_TOKEN</code>.
+          </li>
+        </ul>
+        <p>
+          Exit status: the command&apos;s own, 125 when the scope could not be set up, and 127 when the command could
+          not start. Linux does not match this yet: a failed helper setup exits 127, and so does a command whose
+          helper was killed while it ran.
         </p>
         <H2>
-          <code>{SITE.name} grant</code>
+          <code>{SITE.name} grant</code> and <code>revoke</code>
         </H2>
-        <Code>{`${SITE.name} grant <scope> <host> --for <duration>`}</Code>
-        <p>Will give a scope temporary access to one host. Owner only, over a control socket the scope cannot reach.</p>
-        <Note>
-          Status, revocation and app-scope commands will be documented when the contract is frozen. Until then, flags
-          and output may change.
-        </Note>
+        <Code>{`${SITE.name} grant <scope> <host> [--for <duration>]
+${SITE.name} revoke <scope> <host>`}</Code>
+        <p>
+          A grant gives a running scope access to one more host for a while: a duration such as 90s, 10m or 1h, 10
+          minutes by default and 1 hour at most. It never lifts the port, address or local-network checks.{' '}
+          <code>revoke</code> ends it early. Owner only, over a control socket the scope cannot reach.
+        </p>
+        <H2>
+          <code>{SITE.name} policy check</code>
+        </H2>
+        <Code>{`${SITE.name} policy check <file>`}</Code>
+        <p>
+          Reads a policy the way <code>run</code> does, and prints its mode, counts, ports and short hash, or the first
+          error.
+        </p>
+        <Note>Until the CLI is frozen, flags and output may change. App-scope commands will come with app scopes.</Note>
       </>
     ),
   },
@@ -492,10 +608,10 @@ error: the control socket is not reachable from inside a scope`}</Code>
         <StatusCards />
         <H2>macOS</H2>
         <p>
-          <strong>Tasks.</strong> An experimental session mode. The command will run under the built-in sandbox
-          (Seatbelt, started through <code>sandbox-exec</code>, which Apple marks as deprecated). The profile denies
-          outbound connections except to the scope&apos;s local proxy and relay, and denies writes to the scope&apos;s
-          state directory. The sandbox cannot filter by host name, so names go through the proxy.
+          <strong>Tasks.</strong> Experimental. The command runs under the built-in sandbox (Seatbelt, started through{' '}
+          <code>sandbox-exec</code>). The profile denies outbound
+          connections except to the scope&apos;s local proxy and relay, and denies writes to {SITE.name}&apos;s state
+          directory. The sandbox cannot filter by host name, so names go through the proxy.
         </p>
         <p>
           <strong>Apps.</strong> A Network Extension filter, written in Swift, will decide per app, by code-signing
@@ -505,20 +621,22 @@ error: the control socket is not reachable from inside a scope`}</Code>
         </p>
         <H2>Linux</H2>
         <p>
-          <strong>Tasks.</strong> Each task will get a root-owned cgroup v2 before it executes. eBPF programs on that
-          cgroup will admit only TCP connections to the scope&apos;s local proxy. Refusals go to a per-scope ring buffer
-          and become receipts; ring-buffer loss is counted and never allows traffic.
+          <strong>Tasks.</strong> Each task gets a root-owned cgroup v2 before it executes. eBPF programs on that
+          cgroup admit only TCP connections to the scope&apos;s local proxy; UDP and IPv6 have no allow path. Refusals
+          go to a per-scope ring buffer and become receipts. Ring-buffer loss is counted and never allows traffic.
         </p>
         <p>
-          A small helper with file capabilities, never {SITE.name} itself, will start the command paused, enroll it,
-          arm the programs and only then let it run. A private mount namespace will hide resolver and daemon sockets
-          and make the state directory read-only. Landlock and seccomp will close abstract Unix sockets, raw sockets
-          and io_uring. Host nftables rules are not changed. The owner installs the helper with a short setup script,
-          run with sudo.
+          A small helper with file capabilities, never {SITE.name} itself, starts the command, holds it until the
+          programs are attached, and only then lets it run. A private mount namespace hides resolver and daemon
+          sockets and makes the state directory read-only. Seccomp and Landlock refuse raw sockets, filesystem and
+          abstract Unix sockets, new namespaces and io_uring. Host nftables rules are not changed. The owner installs the helper with a short
+          setup script run with sudo, once per boot. See{' '}
+          <a href="https://github.com/ValentinTorassa/blackice/blob/main/docs/linux.md">docs/linux.md</a>.
         </p>
         <p>
-          <strong>Apps.</strong> Host-wide attribution without PID races or trust in process names is the main open
-          risk. The mechanism will be chosen after a spike.
+          <strong>Apps.</strong> In review, not cleared: a first build and the fixes from its security review. Kernel
+          tests in a virtual machine and a security clearance come before any install. The hard part is telling apps
+          apart without trusting process names or racing PIDs.
         </p>
       </>
     ),
@@ -530,32 +648,31 @@ error: the control socket is not reachable from inside a scope`}</Code>
     description: 'A scope for every command fx runs, or one scope around the whole agent.',
     body: () => (
       <>
-        <Note>
-          <strong>Designed, not yet verified.</strong> The per-command mode needs a small patch to fx that is not part
-          of fx upstream.
-        </Note>
+        <Note>The per-command mode is recorded on macOS with a scripted test model (P0-07).</Note>
         <H2>A scope per command</H2>
-        <Code title="fx with a small blackice hook patch (not upstream)" label="Illustrative">{`# fx's shell tool asks to run:
-npm test
+        <Code title="fx with the blackice hook patch" label="Illustrative">{`# fx's shell tool asks to run:
+npm ci
 # the hook runs it as:
-${SITE.name} run --policy policy.json -- npm test`}</Code>
+${SITE.name} run --policy policy.json -- npm ci`}</Code>
         <p>
-          A small, declared patch adds a built-in PreToolUse handler to{' '}
-          <a href="https://github.com/vercel-labs/fx">fx</a>. For the shell tool, it will rewrite each call to run
-          through <code>{SITE.name} run</code>, so every command fx launches gets its own scope and its own receipts.
-          fx itself, and its model traffic, stay outside the scopes. Each scope will also get a scrubbed environment,
-          so secrets in fx&apos;s environment do not pass in.
+          A small patch, not part of fx upstream, adds a built-in PreToolUse handler to{' '}
+          <a href="https://github.com/vercel-labs/fx">fx</a>. For the shell tool, it rewrites each call to run through{' '}
+          <code>{SITE.name} run</code>, so every shell command fx launches gets its own scope and its own receipts.
+          fx&apos;s <code>write_file</code> outside the workspace and its <code>web_fetch</code> are blocked. Each scope
+          starts with a clean environment: in P0-07, a test variable set in fx&apos;s environment did not reach the
+          command.
         </p>
         <p>
-          The patch will live in this repository under <code>integrations/fx/</code>. fx is Apache-2.0.
+          The patch lives in this repository under <code>integrations/fx/</code>, for fx 0.0.16. fx is Apache-2.0.
         </p>
         <H2>One scope around fx</H2>
         <Code title="terminal" label="Illustrative">{`$ ${SITE.name} run --policy policy.json -- fx`}</Code>
         <p>
-          The fallback: fx and everything it starts in one task scope, with no changes to fx. In this mode, fx will
-          reach its model through a relay outside the scope, so the model key never enters it.
+          fx and everything it starts in one task scope, with no changes to fx. This mode is not finished yet. In it,
+          fx will reach its model through the relay that <code>{SITE.name} run --relay</code> starts outside the
+          scope, so the model key never enters it. The relay is built and has no evidence entry yet.
         </p>
-        <p>What the relay will not do:</p>
+        <p>What the relay does not do:</p>
         <ul>
           <li>
             A tool inside the scope can still send any content to the allowed model endpoint through the relay. The
@@ -566,7 +683,7 @@ ${SITE.name} run --policy policy.json -- npm test`}</Code>
             run outside every scope.
           </li>
         </ul>
-        <H2>Why it helps</H2>
+        <H2>Why use it with fx</H2>
         <p>
           In its default <code>auto</code> mode, fx runs recognized project commands such as tests, builds and local
           installs directly, and sends unfamiliar commands to a reviewer model (
@@ -577,8 +694,15 @@ ${SITE.name} run --policy policy.json -- npm test`}</Code>
         </p>
         <H2>Limits</H2>
         <ul>
-          <li>MCP servers are not covered by the first proof.</li>
-          <li>In the per-command mode, fx&apos;s own connections, model traffic included, are outside every scope.</li>
+          <li>
+            In the per-command mode, fx starts no MCP servers, and its own network and MCP tools are blocked, not
+            scoped.
+          </li>
+          <li>
+            In the per-command mode, fx itself, its own file reads, its writes inside the workspace and its own
+            connections, model traffic included, are outside every scope. What fx reads goes to the model&apos;s
+            provider.
+          </li>
         </ul>
       </>
     ),
@@ -587,7 +711,7 @@ ${SITE.name} run --policy policy.json -- npm test`}</Code>
     slug: 'limits',
     group: 'Project',
     title: 'Limits',
-    description: `What ${SITE.name} does not do. These limits are declared, not hidden.`,
+    description: `What ${SITE.name} does not do.`,
     body: () => (
       <>
         <ul className="limits">
@@ -612,8 +736,17 @@ ${SITE.name} run --policy policy.json -- npm test`}</Code>
             sent to an allowed destination is out of scope.
           </li>
           <li>
-            <strong>Outside daemons.</strong> Work handed to launchd, docker, a tmux server or another daemon runs
-            outside the task.
+            <strong>Outside daemons.</strong> Work handed to a service outside the task (launchd, <code>open</code>,{' '}
+            <code className="nb">systemd-run --user</code>, Docker, a tmux server) is refused only where a test shows
+            it.
+          </li>
+          <li>
+            <strong>Shared CDNs.</strong> An allowed name on a shared CDN can reach other sites on that CDN through
+            domain fronting inside TLS: the proxy checks the TLS server name, not the encrypted request.
+          </li>
+          <li>
+            <strong>Local receipts.</strong> Receipts are a local record for diagnosis. Other programs of the same
+            user, and administrators, can change them.
           </li>
           <li>
             <strong>Inherited sockets.</strong> Sockets and file descriptors opened before the task, or passed in from
@@ -624,8 +757,24 @@ ${SITE.name} run --policy policy.json -- npm test`}</Code>
             other IPC owned by the same user.
           </li>
           <li>
-            <strong>macOS session mode.</strong> It relies on <code>sandbox-exec</code>, which Apple marks as
-            deprecated, so it stays experimental. App control on macOS needs a signed Network Extension.
+            <strong>macOS task scopes.</strong> They rely on <code>sandbox-exec</code>, which Apple marks as
+            deprecated, so they stay experimental. App control on macOS needs a signed Network Extension.
+          </li>
+          <li>
+            <strong>macOS receipts.</strong> A kernel refusal gets a receipt only when macOS logs it, and it logs
+            refusals of programs signed by Apple. An ad-hoc-signed program, such as one you built yourself, is refused
+            the same way but leaves no receipt. Programs signed with a Developer ID were not tested. Under a burst some
+            receipts are lost, and a process that outlives the command gets none.
+          </li>
+          <li>
+            <strong>Linux.</strong> Ping, SCTP and raw sockets are refused when they are created, so they leave no
+            receipt. Only x86_64 was run.
+          </li>
+          <li>
+            <strong>Linux helper killed.</strong> If the helper is killed while a scope runs, processes that detached
+            from the command keep running with access only to the dead proxy&apos;s local port, which another local
+            program can later listen on; removing them needs root, and the receipts wrongly say the command did not
+            start.
           </li>
           <li>
             <strong>Failure behavior.</strong> What happens when a broker, proxy or extension fails is stated per fault

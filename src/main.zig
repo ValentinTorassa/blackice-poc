@@ -9,13 +9,14 @@ pub const seatbelt = @import("macos/seatbelt.zig");
 pub const run_cmd = @import("cli/run.zig");
 pub const grant_cmd = @import("cli/grant.zig");
 
-pub const version = "0.0.0-poc";
+pub const version = "0.1.0";
 
 const usage =
-    \\blackice: network permissions for apps and agent tasks (proof of concept)
+    \\blackice: network permissions for apps and agent tasks
     \\
     \\usage:
     \\  blackice version
+    \\  blackice --version
     \\  blackice policy check FILE
     \\  blackice run --policy FILE [--env NAME]... [--relay --model ID...] -- CMD [ARG]...
     \\  blackice grant SCOPE HOST [--for 10m]
@@ -49,7 +50,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (std.mem.eql(u8, cmd, "app") and @import("builtin").os.tag == .linux) {
         return @import("linux/apps/client.zig").run(init.gpa, io, args[2..], out, errw);
     }
-    if (std.mem.eql(u8, cmd, "version")) {
+    if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version")) {
         try out.print("blackice {s}\n", .{version});
         return 0;
     }

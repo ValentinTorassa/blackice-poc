@@ -66,7 +66,7 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
         PresenceGate.perform(prompt, using: SystemPresenceAuthenticator(), announce: { reason in
             FileHandle.standardError.write(Data((reason + "\n").utf8))
         }, denied: {
-            auditControl(action, parent: parent.pid, approved: false)
+            auditControl(prompt, approved: false)
             fail("user_presence_required_or_cancelled")
         }, authorized: {
             DispatchQueue.main.async {
@@ -77,7 +77,7 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
                         fail("configuration_changed_during_authentication: review and retry")
                     }
                     refuseUnlessReady(action, candidate: candidate, current)
-                    auditControl(action, parent: parent.pid, approved: true)
+                    auditControl(prompt, approved: true)
                     perform(current)
                 }
             }
@@ -85,14 +85,9 @@ func withOwnerPresence(_ action: HostAction, candidate: AppConfiguration? = nil,
     }
 }
 
-func auditControl(_ action: HostAction, parent: pid_t, approved: Bool) {
-    var receipt = Receipt(scope: AppFilterConstants.controlScope, policy: "unavailable", generation: 0,
-                          point: "control", event: "owner_authentication")
-    receipt.verdict = approved ? "allow" : "deny"
-    receipt.reason = approved ? "user_presence_confirmed" : "user_presence_refused"
-    receipt.detail = "backend=network_extension;action=\(action.rawValue);parent_pid=\(parent)"
+func auditControl(_ prompt: AuthorizationPrompt, approved: Bool) {
     let logger = Logger(subsystem: AppFilterConstants.logSubsystem, category: "control")
-    if let line = try? receipt.jsonLine() { logger.notice("\(line, privacy: .public)") }
+    if let line = try? prompt.receipt(approved: approved).jsonLine() { logger.notice("\(line, privacy: .public)") }
 }
 
 func loadManager(_ body: @escaping (NEFilterManager) -> Void) {

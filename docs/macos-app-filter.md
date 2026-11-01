@@ -363,7 +363,9 @@ This command produces unified-log envelopes. Per-flow JSON (including destinatio
 and identities) is marked private and is normally shown as `<private>` under the
 OS privacy policy. Public control records contain lifecycle state, aggregate
 counts or host authorization outcomes, never connection destinations. The host
-uses category `control` for user-presence results and includes the requesting
+uses category `control` for user-presence results. Each one's `policy` and `gen`
+are the configuration digest and generation that the prompt showed (`unavailable`
+and 0 when nothing readable was saved), and its `detail` includes the requesting
 host's parent PID for audit only; that PID never authorizes anything. No payloads,
 complete URLs, raw audit tokens, executable paths, credentials or environment
 variables are logged. Retention follows OS policy; no logging privacy settings

@@ -62,6 +62,20 @@ struct AuthorizationPrompt {
     var reason: String {
         "\(action.reason). \(policy.summary). Parent: \(parent.name) (pid \(parent.pid), audit only)."
     }
+
+    /// The control receipt for one user-presence result. It carries the
+    /// configuration digest and generation this prompt showed, so an approval
+    /// in the log can be matched to what was approved.
+    func receipt(approved: Bool) -> Receipt {
+        let shown: AppConfiguration?
+        if case .available(let config) = policy { shown = config } else { shown = nil }
+        var receipt = Receipt(scope: AppFilterConstants.controlScope, policy: shown?.id ?? "unavailable",
+                              generation: shown?.generation ?? 0, point: "control", event: "owner_authentication")
+        receipt.verdict = approved ? "allow" : "deny"
+        receipt.reason = approved ? "user_presence_confirmed" : "user_presence_refused"
+        receipt.detail = "backend=network_extension;action=\(action.rawValue);parent_pid=\(parent.pid)"
+        return receipt
+    }
 }
 
 /// New context per operation, no cached authorization or environment/CLI bypass.

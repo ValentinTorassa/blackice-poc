@@ -13,6 +13,25 @@ func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) {
 func rejects(_ message: String, _ body: () throws -> Void) {
     do { try body(); expect(false, message) } catch { expect(true, message) }
 }
+/// Also checks which check refused it, for inputs that more than one check would refuse.
+func rejects(_ message: String, reason: String, _ body: () throws -> Void) {
+    do { try body(); expect(false, message) }
+    catch let error as ConfigurationError { expect(error.description == reason, "\(message) (got \(error.description))") }
+    catch { expect(false, "\(message) (got \(error))") }
+}
+/// Arrays nested around one integer, at any depth.
+struct NestedJSON: Decodable {
+    init(from decoder: Decoder) throws {
+        if var items = try? decoder.unkeyedContainer() {
+            while !items.isAtEnd { _ = try items.decode(NestedJSON.self) }
+        } else {
+            _ = try decoder.singleValueContainer().decode(Int.self)
+        }
+    }
+}
+func nestedArrays(_ depth: Int) -> Data {
+    Data((String(repeating: "[", count: depth) + "0" + String(repeating: "]", count: depth)).utf8)
+}
 func policy(_ network: String) throws -> NetworkPolicy {
     try NetworkPolicy(data: Data("{\"version\":\"blackice.policy/v0\",\"network\":\(network)}".utf8))
 }
@@ -92,8 +111,13 @@ do {
     for subnet in ["1.2.3.4/33", "::/129", "::ffff:127.0.0.1/129", "1.2.3.4/-1", "1.2.3.4/", "0/0", "1.2.3.4/0000"] {
         rejects("invalid subnet") { _ = try CIDR(subnet) }
     }
-    rejects("oversized policy") { _ = try NetworkPolicy(data: Data(repeating: 32, count: StrictJSON.maximumBytes + 1)) }
-    rejects("nesting cap") { _ = try StrictJSON.decode([String].self, from: Data((String(repeating: "[", count: 40) + "0" + String(repeating: "]", count: 40)).utf8)) }
+    // Valid JSON on both sides of each limit, so only the limit can refuse it.
+    let padded = raw + Data(repeating: 32, count: StrictJSON.maximumBytes - raw.count)
+    expect(try NetworkPolicy(data: padded).mode == "deny-all", "policy of exactly 1 MiB accepted")
+    rejects("oversized policy", reason: "configuration_size") { _ = try NetworkPolicy(data: padded + Data([32])) }
+    _ = try StrictJSON.decode(NestedJSON.self, from: nestedArrays(31))
+    expect(true, "nesting below the cap accepted")
+    rejects("nesting cap", reason: "json_nesting_limit") { _ = try StrictJSON.decode(NestedJSON.self, from: nestedArrays(32)) }
     rejects("empty ports rejected by v0 contract") { _ = try policy(#"{"mode":"allow-all","ports":[]}"#) }
     expect(try policy(#"{"mode":"allow-all","ports":null}"#).checkPort(443).reason == "allowed_port", "nullable ports defaults as core")
     expect(allow.checkPort(443).allowed && allow.checkPort(80).allowed && !allow.checkPort(22).allowed, "default ports")
